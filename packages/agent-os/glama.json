@@ -1,0 +1,67 @@
+{
+  "$schema": "https://glama.ai/mcp/schemas/server.json",
+  "name": "agentos-mcp-server",
+  "display_name": "Agent OS MCP Server",
+  "description": "AI agent governance with policy enforcement, code safety verification, multi-model hallucination detection (CMVK), trust attestation (IATP), and immutable audit trails. Covers 9/10 OWASP Agentic Top 10 risks.",
+  "repository": "https://github.com/imran-siddique/agent-os",
+  "homepage": "https://imransiddique.com",
+  "maintainers": [
+    "imran-siddique"
+  ],
+  "author": {
+    "name": "Imran Siddique",
+    "url": "https://github.com/imran-siddique"
+  },
+  "license": "MIT",
+  "categories": ["security", "governance", "safety", "code-review", "audit"],
+  "tags": ["ai-agents", "governance", "owasp", "policy-enforcement", "trust", "mcp"],
+  "tools": [
+    {
+      "name": "verify_code_safety",
+      "description": "Check generated code for dangerous patterns (DROP TABLE, rm -rf, hardcoded secrets)"
+    },
+    {
+      "name": "cmvk_verify",
+      "description": "Multi-model claim verification to detect hallucinations"
+    },
+    {
+      "name": "cmvk_review",
+      "description": "Multi-model code review for security and bugs"
+    },
+    {
+      "name": "kernel_execute",
+      "description": "Execute actions with policy enforcement (strict/permissive/audit)"
+    },
+    {
+      "name": "iatp_sign",
+      "description": "Sign trust attestations for inter-agent communication"
+    },
+    {
+      "name": "iatp_verify",
+      "description": "Verify trust relationships between agents"
+    },
+    {
+      "name": "iatp_reputation",
+      "description": "Query/modify agent reputation scores"
+    },
+    {
+      "name": "get_audit_log",
+      "description": "Retrieve immutable audit trail"
+    }
+  ],
+  "resources": [
+    "vfs://{agent_id}/mem/* - Agent memory",
+    "vfs://{agent_id}/policy/* - Agent policies (read-only)",
+    "audit://{agent_id}/log - Audit trail (read-only)"
+  ],
+  "prompts": [
+    "governed_agent - Standard governed agent instructions",
+    "verify_claim - CMVK verification template",
+    "safe_execution - Safe action execution template"
+  ],
+  "related_servers": [
+    "imran-siddique/agentmesh-mcp-server",
+    "imran-siddique/agent-hypervisor",
+    "imran-siddique/agent-sre"
+  ]
+}
