@@ -1,5 +1,10 @@
 # Agent Lightning — RL Training Governance
 
+> [!IMPORTANT]
+> **Community Preview** — The `agent-lightning` package on PyPI is a community preview release
+> for testing and evaluation only. It is **not** an official Microsoft-signed release.
+> Official signed packages will be available in a future release.
+
 Train AI agents with RL while maintaining **0% policy violations**.
 
 *Part of the [Agent Governance Toolkit](https://github.com/microsoft/agent-governance-toolkit)*

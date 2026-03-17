@@ -1,5 +1,10 @@
 # AgentOS MCP Server
 
+> [!IMPORTANT]
+> **Community Preview** — This npm package is a community preview release for testing and
+> evaluation only. It is **not** an official Microsoft-signed release. Official signed
+> packages under the `@microsoft` scope will be available in a future release.
+
 > **Build safe AI agents with natural language and 0% policy violations**
 
 <a href="https://glama.ai/mcp/servers/@microsoft/agentos-mcp-server">

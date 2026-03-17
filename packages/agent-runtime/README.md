@@ -11,6 +11,11 @@
 
 </div>
 
+> [!IMPORTANT]
+> **Community Preview** — The `agent-runtime` package on PyPI is a community preview release
+> for testing and evaluation only. It is **not** an official Microsoft-signed release.
+> Official signed packages will be available in a future release.
+
 ---
 
 > **Note:** This package was previously named `agent-hypervisor`. The `agent-hypervisor` package

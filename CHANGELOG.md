@@ -5,7 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+> [!IMPORTANT]
+> All releases to date are **community preview releases** for testing and evaluation.
+> They are not official Microsoft-signed releases. Official signed packages are coming
+> in a future release.
+
 ## [Unreleased]
+
+## [2.2.0] - 2026-03-17
+
+### Added
+- ESRP Release ADO pipeline for PyPI publishing (`pipelines/pypi-publish.yml`)
+- ESRP Release ADO pipeline for npm publishing (`pipelines/npm-publish.yml`)
+- npm build + pack job in GitHub Actions publish workflow
+- Community preview disclaimers across all READMEs, release notes, and package descriptions
+- `PUBLISHING.md` guide covering PyPI, npm, and NuGet publishing requirements
+- `agent-runtime` re-export wrapper package (`src/agent_runtime/__init__.py`)
+- `RELEASE_NOTES_v2.2.0.md`
+
+### Changed
+- GitHub Actions `publish.yml` no longer publishes to PyPI (build + attest only)
+- Python package author updated to `Microsoft Corporation` with team DL (all 7 packages)
+- npm packages renamed to `@microsoft` scope (from `@agentmesh`, `@agent-os`, unscoped)
+- npm package author set to `Microsoft Corporation` (all 9 packages)
+- All package descriptions prefixed with `Community Edition`
+- License corrected to MIT where mismatched (agent-mesh classifier, 2 npm packages)
+
+### Fixed
+- `agent-runtime` build failure (invalid parent-directory hatch reference)
+- Missing `License :: OSI Approved :: MIT License` classifier in 3 Python packages
+- Incorrect repository URLs in 2 npm packages
 
 ## [2.1.0] - 2026-03-15
 

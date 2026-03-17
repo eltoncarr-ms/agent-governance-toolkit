@@ -26,6 +26,11 @@
 [![Benchmark](https://img.shields.io/badge/latency-268%CE%BCs%20pipeline-orange)](benchmarks/)
 [![Discussions](https://img.shields.io/github/discussions/microsoft/agent-governance-toolkit)](https://github.com/microsoft/agent-governance-toolkit/discussions)
 
+> [!IMPORTANT]
+> **Community Preview** — The `agent-hypervisor` package on PyPI is a community preview release
+> for testing and evaluation only. It is **not** an official Microsoft-signed release.
+> Official signed packages will be available in a future release.
+
 > ⭐ **If this project helps you, please star it!** It helps others discover Agent Hypervisor.
 
 > 📦 **Install the full stack:** `pip install agent-governance-toolkit[full]` — [PyPI](https://pypi.org/project/ai-agent-governance/) | [GitHub](https://github.com/microsoft/agent-governance-toolkit)

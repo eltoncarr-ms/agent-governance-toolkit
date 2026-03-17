@@ -1,5 +1,10 @@
 # Agent Governance Toolkit v2.1.0
 
+> [!IMPORTANT]
+> **Community Preview Release** — This release is for testing and evaluation purposes only.
+> Packages published to PyPI, npm, and NuGet are **not** official Microsoft-signed releases.
+> Official Microsoft-signed packages via ESRP Release will be available in a future release.
+
 **The missing security layer for AI agents — now in Python, TypeScript, and .NET.**
 
 Runtime policy enforcement, zero-trust identity, execution sandboxing, and SRE — 10/10 OWASP Agentic Top 10 coverage with 6,100+ tests across three languages.

@@ -13,6 +13,11 @@
 [![Python](https://img.shields.io/badge/python-3.9+-blue.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+> [!IMPORTANT]
+> **Community Preview** — The `agent-governance-toolkit` package on PyPI is a community preview
+> release for testing and evaluation only. It is **not** an official Microsoft-signed release.
+> Official signed packages will be available in a future release.
+
 ```
 pip install agent-governance-toolkit[full]
 ```

@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agent-runtime"
-version = "2.1.0"
-description = "Agent Runtime — Execution supervisor for multi-agent sessions with privilege rings, saga orchestration, and audit trails"
+version = "2.2.0"
+description = "Community Edition — Agent Runtime: Execution supervisor for multi-agent sessions with privilege rings, saga orchestration, and audit trails"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"

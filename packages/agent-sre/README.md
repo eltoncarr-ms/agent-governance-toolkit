@@ -21,6 +21,11 @@
 [![Discussions](https://img.shields.io/github/discussions/microsoft/agent-governance-toolkit)](https://github.com/microsoft/agent-governance-toolkit/discussions)
 [![awesome-opentelemetry](https://img.shields.io/badge/awesome--opentelemetry-listed-orange)](https://github.com/magsther/awesome-opentelemetry/pull/24)
 
+> [!IMPORTANT]
+> **Community Preview** — The `agent-sre` package on PyPI is a community preview release
+> for testing and evaluation only. It is **not** an official Microsoft-signed release.
+> Official signed packages will be available in a future release.
+
 > ⭐ **If this project helps you, please star it!** It helps others discover Agent SRE.
 
 > 🔗 **Part of the [Agent Governance Ecosystem](https://github.com/microsoft/agent-governance-toolkit)** — Works with [Agent OS](https://github.com/microsoft/agent-governance-toolkit) (governance), [AgentMesh](https://github.com/microsoft/agent-governance-toolkit) (identity & trust), and [Agent Runtime](https://github.com/microsoft/agent-governance-toolkit) (runtime sessions)

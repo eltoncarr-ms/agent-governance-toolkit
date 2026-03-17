@@ -1,5 +1,10 @@
 # @agentmesh/sdk
 
+> [!IMPORTANT]
+> **Community Preview** — This npm package is a community preview release for testing and
+> evaluation only. It is **not** an official Microsoft-signed release. Official signed
+> packages under the `@microsoft` scope will be available in a future release.
+
 TypeScript SDK for [AgentMesh](../../README.md) — a governance-first framework for multi-agent systems.
 
 Provides agent identity (Ed25519 DIDs), trust scoring, policy evaluation, hash-chain audit logging, and a unified `AgentMeshClient`.
