@@ -1,3 +1,6 @@
+<!-- Copyright (c) Microsoft Corporation. -->
+<!-- Licensed under the MIT License. -->
+
 # Tutorial: Policy-as-Code for AI Agents
 
 A step-by-step guide to governing AI agents with declarative policies, progressing

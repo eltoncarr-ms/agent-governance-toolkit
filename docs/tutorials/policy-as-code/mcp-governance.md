@@ -1,3 +1,6 @@
+<!-- Copyright (c) Microsoft Corporation. -->
+<!-- Licensed under the MIT License. -->
+
 # Supplemental: MCP Governance Policies
 
 This guide moves one layer outward to **Model Context Protocol (MCP)**, where
