@@ -5,6 +5,24 @@ All notable changes to Agent OS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **GovernedToolMiddleware** — policy-evaluated FunctionMiddleware that evaluates tool
+  invocations against YAML governance rules (tool name, arguments, agent identity).
+  Opt-in via `create_governance_middleware(enable_governed_tool_guard=True)`.
+- **create_mcp_governance_gateway()** — companion factory that creates an `MCPGateway`
+  for governing remote MCP tool calls with the same allow/deny semantics as the
+  middleware stack. Closes the MCP tool governance bypass.
+- **AuditLogToMCPSinkAdapter** — bridges MAF `AuditLog` to the `MCPAuditSink` protocol
+  for unified audit trails across local and MCP tool governance.
+- Sample two-layer governance policy (`examples/policies/tool_guard_policy.yaml`).
+
+### Fixed
+- `CapabilityGuardMiddleware` and `RogueDetectionMiddleware` now return normally on
+  denial instead of raising `MiddlewareTermination`, preventing orphaned tool calls
+  and 400 errors on subsequent conversation turns.
+
 ## [1.0.0] - 2026-01-26
 
 ### Added - Monorepo Creation

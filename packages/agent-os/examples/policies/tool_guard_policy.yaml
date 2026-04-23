@@ -1,0 +1,75 @@
+# Two-Layer Governance Policy Example
+#
+# This policy demonstrates AGT's two-layer governance architecture:
+#
+#   Layer 1 — GovernancePolicyMiddleware (AgentMiddleware, pre-LLM)
+#     Evaluates rules whose `field` targets message-level context keys
+#     like "message". Fires BEFORE the LLM generates a response.
+#
+#   Layer 2 — GovernedToolMiddleware (FunctionMiddleware, pre-tool)
+#     Evaluates rules whose `field` targets tool-level context keys like
+#     "tool_name" and "tool_args". Fires AFTER the LLM requests a tool
+#     call but BEFORE the tool executes.
+#
+# Both layers use the same PolicyEvaluator and can share a single YAML
+# file. The evaluator only matches rules whose `field` appears in the
+# evaluation context, so message rules never fire during tool evaluation
+# and vice versa.
+
+name: "two-layer-governance"
+version: "1.0"
+
+defaults:
+  action: allow
+
+rules:
+  # ── Layer 1: Message-level rules (GovernancePolicyMiddleware) ──────────
+  #
+  # These rules fire during agent invocation, before the LLM sees the
+  # user's message.  The evaluation context contains: agent, message,
+  # timestamp, stream, message_count.
+
+  - name: "block-ssn-in-message"
+    description: "Block messages containing SSN patterns"
+    priority: 100
+    condition:
+      field: "message"
+      operator: "matches"
+      value: "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+    action: deny
+    message: "SSN pattern detected in input"
+
+  # ── Layer 2: Tool-level rules (GovernedToolMiddleware) ─────────────────
+  #
+  # These rules fire when a tool is about to execute.  The evaluation
+  # context contains: tool_name, tool_args, tool_args_structured, agent_id.
+
+  - name: "block-delete-file"
+    description: "Never allow the delete_file tool"
+    priority: 100
+    condition:
+      field: "tool_name"
+      operator: "eq"
+      value: "delete_file"
+    action: deny
+    message: "Tool 'delete_file' is blocked by governance policy"
+
+  - name: "block-ssn-in-tool-args"
+    description: "Block tool calls containing SSN patterns in arguments"
+    priority: 90
+    condition:
+      field: "tool_args"
+      operator: "matches"
+      value: "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+    action: deny
+    message: "SSN pattern detected in tool arguments"
+
+  - name: "block-sensitive-paths"
+    description: "Block file operations on sensitive paths"
+    priority: 80
+    condition:
+      field: "tool_args"
+      operator: "matches"
+      value: "(/etc/passwd|\\.env|/etc/shadow)"
+    action: deny
+    message: "Access to sensitive file path is blocked"

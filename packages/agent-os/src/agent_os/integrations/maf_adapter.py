@@ -39,6 +39,10 @@ import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from agent_os.integrations.base import GovernancePolicy
+from agent_os.integrations.governed_tool import GovernedToolMiddleware
+from agent_os.mcp_gateway import MCPGateway
+from agent_os.mcp_protocols import MCPAuditSink
 from agent_os.policies import PolicyDecision, PolicyEvaluator
 from agentmesh.governance import AuditEntry, AuditLog
 from agent_sre.anomaly import RiskLevel, RogueAgentDetector, RogueDetectorConfig
@@ -529,6 +533,40 @@ class RogueDetectionMiddleware(FunctionMiddleware):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# AuditLog → MCPAuditSink adapter
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class AuditLogToMCPSinkAdapter:
+    """Adapts :class:`AuditLog` (MAF) to the :class:`MCPAuditSink` protocol.
+
+    Allows :class:`MCPGateway` to write audit entries into a shared
+    MAF audit log, enabling unified audit trails across local middleware
+    and MCP tool governance.
+    """
+
+    def __init__(self, audit_log: AuditLog) -> None:
+        self._audit_log = audit_log
+
+    def record(self, entry: dict) -> None:
+        """Persist *entry* as an :class:`AuditEntry` in the wrapped log."""
+        try:
+            self._audit_log.log(
+                event_type="mcp_tool_decision",
+                agent_did=entry.get("agent_id", "unknown"),
+                action=entry.get("reason", ""),
+                resource=entry.get("tool_name", "unknown"),
+                data=entry,
+                outcome="allowed" if entry.get("allowed") else "denied",
+            )
+        except Exception:
+            logger.warning(
+                "Audit bridge failed to record MCP entry — policy enforcement unaffected",
+                exc_info=True,
+            )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Convenience factory
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -539,6 +577,7 @@ def create_governance_middleware(
     denied_tools: list[str] | None = None,
     agent_id: str = "default-agent",
     enable_rogue_detection: bool = True,
+    enable_governed_tool_guard: bool = False,
     audit_log: AuditLog | None = None,
 ) -> list:
     """Create a complete governance middleware stack for a MAF agent.
@@ -550,8 +589,10 @@ def create_governance_middleware(
 
     1. :class:`AuditTrailMiddleware` (if *audit_log* provided)
     2. :class:`GovernancePolicyMiddleware` (if *policy_directory* provided)
-    3. :class:`CapabilityGuardMiddleware` (if allow/deny lists provided)
-    4. :class:`RogueDetectionMiddleware` (if *enable_rogue_detection*)
+    3. :class:`GovernedToolMiddleware` (if *policy_directory* provided **and**
+       *enable_governed_tool_guard* is ``True``)
+    4. :class:`CapabilityGuardMiddleware` (if allow/deny lists provided)
+    5. :class:`RogueDetectionMiddleware` (if *enable_rogue_detection*)
 
     Args:
         policy_directory: Path to a directory of YAML policy files.
@@ -563,6 +604,9 @@ def create_governance_middleware(
             detection).
         enable_rogue_detection: Whether to include the
             :class:`RogueDetectionMiddleware`.
+        enable_governed_tool_guard: Whether to include the
+            :class:`GovernedToolMiddleware`.  Requires *policy_directory*
+            to be set so that a :class:`PolicyEvaluator` is available.
         audit_log: Shared :class:`AuditLog` instance.  When ``None``,
             a fresh in-memory log is created if any auditing middleware
             is needed.
@@ -600,11 +644,22 @@ def create_governance_middleware(
         stack.append(AuditTrailMiddleware(audit_log=audit_log, agent_did=agent_id))
 
     # 2. Governance policy enforcement.
+    evaluator: PolicyEvaluator | None = None
     if policy_directory is not None:
         evaluator = PolicyEvaluator()
         evaluator.load_policies(policy_directory)
         stack.append(
             GovernancePolicyMiddleware(evaluator=evaluator, audit_log=audit_log)
+        )
+
+    # 2b. Governed tool guard (reuses the same evaluator).
+    if policy_directory is not None and enable_governed_tool_guard and evaluator is not None:
+        stack.append(
+            GovernedToolMiddleware(
+                evaluator=evaluator,
+                agent_id=agent_id,
+                audit_log=audit_log,
+            )
         )
 
     # 3. Capability guard.
@@ -633,3 +688,58 @@ def create_governance_middleware(
         )
 
     return stack
+
+
+def create_mcp_governance_gateway(
+    *,
+    policy: GovernancePolicy | None = None,
+    allowed_tools: list[str] | None = None,
+    denied_tools: list[str] | None = None,
+    audit_log: AuditLog | None = None,
+    audit_sink: MCPAuditSink | None = None,
+) -> MCPGateway:
+    """Create an :class:`MCPGateway` for governing remote MCP tool calls.
+
+    Companion to :func:`create_governance_middleware` — while the middleware
+    stack governs local ``FunctionMiddleware`` tool invocations, this factory
+    creates a gateway for MCP tools that bypass the middleware pipeline.
+
+    Callers must invoke ``gateway.intercept_tool_call(agent_id, tool_name,
+    params)`` before each MCP tool invocation and honour the ``(allowed,
+    reason)`` result.
+
+    When *audit_log* is provided (typically the same instance used by the
+    middleware stack), it is wrapped in an :class:`AuditLogToMCPSinkAdapter`
+    so MCP decisions appear in the unified audit trail.  An explicit
+    *audit_sink* takes precedence.
+
+    Args:
+        policy: Governance policy.  When ``None`` a default policy is
+            created with ``log_all_calls=True`` and a rate limit of 100.
+        allowed_tools: Reserved for future use (MCPGateway currently
+            uses deny-list only).
+        denied_tools: Tools that must never be invoked via MCP.
+        audit_log: MAF :class:`AuditLog` — bridged to ``MCPAuditSink``.
+        audit_sink: Direct :class:`MCPAuditSink` — takes precedence
+            over *audit_log* when both are provided.
+
+    Returns:
+        Configured :class:`MCPGateway` instance.
+    """
+    if policy is None:
+        policy = GovernancePolicy(
+            name="mcp-governance",
+            version="1.0",
+            log_all_calls=True,
+            rate_limit=100,
+        )
+
+    effective_sink: MCPAuditSink | None = audit_sink
+    if effective_sink is None and audit_log is not None:
+        effective_sink = AuditLogToMCPSinkAdapter(audit_log)
+
+    return MCPGateway(
+        policy=policy,
+        denied_tools=denied_tools,
+        audit_sink=effective_sink,
+    )

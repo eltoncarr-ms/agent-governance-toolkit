@@ -68,11 +68,14 @@ from agent_os.integrations.guardrails_adapter import GuardrailsKernel
 from agent_os.integrations.langchain_adapter import LangChainKernel
 try:
     from agent_os.integrations.maf_adapter import (
+        AuditLogToMCPSinkAdapter as MAFAuditLogToMCPSinkAdapter,
         AuditTrailMiddleware as MAFAuditTrailMiddleware,
         CapabilityGuardMiddleware as MAFCapabilityGuardMiddleware,
         GovernancePolicyMiddleware as MAFGovernancePolicyMiddleware,
+        GovernedToolMiddleware as MAFGovernedToolMiddleware,
         RogueDetectionMiddleware as MAFRogueDetectionMiddleware,
         create_governance_middleware as maf_create_governance_middleware,
+        create_mcp_governance_gateway as maf_create_mcp_governance_gateway,
     )
 except ImportError:  # agent_framework is an optional dependency
     pass
@@ -199,7 +202,10 @@ __all__ = [
     "MAFCapabilityGuardMiddleware",
     "MAFAuditTrailMiddleware",
     "MAFRogueDetectionMiddleware",
+    "MAFGovernedToolMiddleware",
+    "MAFAuditLogToMCPSinkAdapter",
     "maf_create_governance_middleware",
+    "maf_create_mcp_governance_gateway",
     # LlamaFirewall
     "LlamaFirewallAdapter",
     "FirewallMode",
