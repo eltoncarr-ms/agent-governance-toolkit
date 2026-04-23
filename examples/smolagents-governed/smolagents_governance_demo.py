@@ -354,6 +354,7 @@ class ToolContext:
     def __init__(self, tool_name: str) -> None:
         self.function = type("F", (), {"name": tool_name})()
         self.result: str | None = None
+        self.metadata: dict = {}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -403,17 +404,17 @@ async def scenario_1(guards: dict[str, CapabilityGuardMiddleware], verbose: bool
             ctx.result = "executed"
 
         guard = guards[role]
-        try:
-            await guard.process(ctx, tool_exec)  # type: ignore[arg-type]
-            icon = "✅" if should_allow else "⚠️"
-            colour = C.GREEN if should_allow else C.YELLOW
-            print(_tree(icon, colour, f"{role} → {tool}", f"{colour}ALLOWED{C.RESET}"))
-            allowed_count += 1
-        except MiddlewareTermination:
+        await guard.process(ctx, tool_exec)  # type: ignore[arg-type]
+        if ctx.metadata.get("governance_blocked"):
             icon = "❌" if not should_allow else "⚠️"
             colour = C.RED if not should_allow else C.YELLOW
             print(_tree(icon, colour, f"{role} → {tool}", f"{colour}BLOCKED{C.RESET}"))
             blocked_count += 1
+        else:
+            icon = "✅" if should_allow else "⚠️"
+            colour = C.GREEN if should_allow else C.YELLOW
+            print(_tree(icon, colour, f"{role} → {tool}", f"{colour}ALLOWED{C.RESET}"))
+            allowed_count += 1
 
     print(f"\n  {C.BOLD}Result:{C.RESET} {C.GREEN}{allowed_count} allowed{C.RESET}, {C.RED}{blocked_count} blocked{C.RESET}")
     return allowed_count, blocked_count
@@ -756,13 +757,13 @@ async def scenario_8(
         # Record the escalation attempt for rogue scoring
         rogue_detector.record_action(agent, f"escalation_{tool}", tool)
 
-        try:
-            await guard.process(ctx, tool_exec)  # type: ignore[arg-type]
-            allowed += 1
-            print(_tree("⚠️", C.YELLOW, f"{agent} → {tool}", f"{C.YELLOW}ALLOWED{C.RESET}"))
-        except MiddlewareTermination:
+        await guard.process(ctx, tool_exec)  # type: ignore[arg-type]
+        if ctx.metadata.get("governance_blocked"):
             blocked += 1
             print(_tree("❌", C.RED, f"{agent} → {tool}", f"{C.RED}BLOCKED{C.RESET}"))
+        else:
+            allowed += 1
+            print(_tree("⚠️", C.YELLOW, f"{agent} → {tool}", f"{C.YELLOW}ALLOWED{C.RESET}"))
 
     # Assess rogue risk after escalation attempts
     assessment = rogue_detector.assess(agent)

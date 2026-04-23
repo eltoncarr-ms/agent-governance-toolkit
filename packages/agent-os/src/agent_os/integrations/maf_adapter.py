@@ -222,8 +222,10 @@ class CapabilityGuardMiddleware(FunctionMiddleware):
 
     Each tool invocation is checked against explicit ``allowed_tools``
     and ``denied_tools`` lists.  If a tool is not permitted, the
-    function result is set to an error string and
-    ``MiddlewareTermination`` is raised.
+    function result is set to an error string and the middleware
+    returns without calling the next handler.  This keeps the tool
+    call intact in the session so the LLM receives the denial as
+    tool output and can respond naturally.
 
     When both ``allowed_tools`` and ``denied_tools`` are provided,
     ``denied_tools`` takes precedence (a tool in both lists is denied).
@@ -273,6 +275,9 @@ class CapabilityGuardMiddleware(FunctionMiddleware):
                 f"⛔ Tool '{func_name}' is not permitted by governance policy"
             )
 
+            metadata: dict[str, Any] = getattr(context, "metadata", {})
+            metadata["governance_blocked"] = True
+
             if self.audit_log:
                 self.audit_log.log(
                     event_type="tool_blocked",
@@ -283,9 +288,7 @@ class CapabilityGuardMiddleware(FunctionMiddleware):
                     outcome="denied",
                 )
 
-            raise MiddlewareTermination(
-                f"Tool '{func_name}' is not permitted by governance policy"
-            )
+            return
 
         # Tool is allowed — log start, execute, log completion.
         if self.audit_log:
@@ -418,9 +421,10 @@ class RogueDetectionMiddleware(FunctionMiddleware):
 
     Feeds every tool invocation into a
     :class:`~agent_sre.anomaly.RogueAgentDetector` and checks the
-    resulting risk assessment.  High-risk agents are blocked with a
-    ``MiddlewareTermination``; medium-risk invocations proceed with a
-    warning logged to the audit trail.
+    resulting risk assessment.  High-risk agents are blocked by
+    setting a denial result and returning without calling the next
+    handler; medium-risk invocations proceed with a warning logged
+    to the audit trail.
 
     Args:
         detector: Pre-configured :class:`RogueAgentDetector`.
@@ -485,6 +489,9 @@ class RogueDetectionMiddleware(FunctionMiddleware):
                 f"score={assessment.composite_score:.2f})"
             )
 
+            metadata: dict[str, Any] = getattr(context, "metadata", {})
+            metadata["governance_blocked"] = True
+
             if self.audit_log:
                 self.audit_log.log(
                     event_type="rogue_detection",
@@ -495,10 +502,7 @@ class RogueDetectionMiddleware(FunctionMiddleware):
                     outcome="denied",
                 )
 
-            raise MiddlewareTermination(
-                f"Agent '{self.agent_id}' quarantined: "
-                f"risk={assessment.risk_level.value}"
-            )
+            return
 
         # Log a warning for MEDIUM or above but allow execution.
         if assessment.risk_level in (RiskLevel.MEDIUM, RiskLevel.HIGH):

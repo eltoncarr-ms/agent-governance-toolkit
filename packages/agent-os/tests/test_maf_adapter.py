@@ -189,11 +189,11 @@ class TestCapabilityGuardMiddleware:
         ctx = _make_function_context(func_name="shell_exec")
         call_next = AsyncMock()
 
-        with pytest.raises(MiddlewareTermination, match="not permitted"):
-            await mw.process(ctx, call_next)
+        await mw.process(ctx, call_next)
 
         call_next.assert_not_awaited()
         assert "not permitted" in ctx.result
+        assert ctx.metadata.get("governance_blocked") is True
 
     @pytest.mark.asyncio
     async def test_blocks_tool_in_denied_list(self):
@@ -201,8 +201,11 @@ class TestCapabilityGuardMiddleware:
         ctx = _make_function_context(func_name="dangerous_tool")
         call_next = AsyncMock()
 
-        with pytest.raises(MiddlewareTermination, match="not permitted"):
-            await mw.process(ctx, call_next)
+        await mw.process(ctx, call_next)
+
+        call_next.assert_not_awaited()
+        assert "not permitted" in ctx.result
+        assert ctx.metadata.get("governance_blocked") is True
 
     @pytest.mark.asyncio
     async def test_denied_list_takes_precedence_over_allowed(self):
@@ -213,8 +216,11 @@ class TestCapabilityGuardMiddleware:
         ctx = _make_function_context(func_name="tool_a")
         call_next = AsyncMock()
 
-        with pytest.raises(MiddlewareTermination, match="not permitted"):
-            await mw.process(ctx, call_next)
+        await mw.process(ctx, call_next)
+
+        call_next.assert_not_awaited()
+        assert "not permitted" in ctx.result
+        assert ctx.metadata.get("governance_blocked") is True
 
     @pytest.mark.asyncio
     async def test_allows_all_when_no_lists(self):
@@ -249,12 +255,35 @@ class TestCapabilityGuardMiddleware:
         ctx = _make_function_context(func_name="bad_tool")
         call_next = AsyncMock()
 
-        with pytest.raises(MiddlewareTermination):
-            await mw.process(ctx, call_next)
+        await mw.process(ctx, call_next)
 
         entries = audit.get_entries_by_type("tool_blocked")
         assert len(entries) == 1
         assert entries[0].outcome == "denied"
+        assert ctx.metadata.get("governance_blocked") is True
+
+    @pytest.mark.asyncio
+    async def test_denied_tool_sets_governance_blocked_metadata(self):
+        mw = CapabilityGuardMiddleware(allowed_tools=["safe_tool"])
+        ctx = _make_function_context(func_name="unsafe_tool")
+        call_next = AsyncMock()
+
+        await mw.process(ctx, call_next)
+
+        assert ctx.metadata["governance_blocked"] is True
+        call_next.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_denied_tool_does_not_raise(self):
+        mw = CapabilityGuardMiddleware(denied_tools=["blocked"])
+        ctx = _make_function_context(func_name="blocked")
+        call_next = AsyncMock()
+
+        # Should return normally — no exception expected.
+        await mw.process(ctx, call_next)
+
+        assert "not permitted" in ctx.result
+        call_next.assert_not_awaited()
 
 
 # ── AuditTrailMiddleware ─────────────────────────────────────────────────
@@ -391,15 +420,76 @@ class TestRogueDetectionMiddleware:
         ctx = _make_function_context(func_name="some_tool")
         call_next = AsyncMock()
 
-        with pytest.raises(MiddlewareTermination, match="quarantined"):
-            await mw.process(ctx, call_next)
+        await mw.process(ctx, call_next)
 
         call_next.assert_not_awaited()
         assert "quarantined" in ctx.result
+        assert ctx.metadata.get("governance_blocked") is True
 
         entries = audit.get_entries_by_type("rogue_detection")
         assert len(entries) == 1
         assert entries[0].action == "quarantine"
+
+    @pytest.mark.asyncio
+    async def test_rogue_quarantine_sets_governance_blocked_metadata(
+        self, detector, monkeypatch,
+    ):
+        from agent_sre.anomaly.rogue_detector import RogueAssessment
+
+        monkeypatch.setattr(
+            detector,
+            "assess",
+            lambda agent_id, timestamp=None: RogueAssessment(
+                agent_id=agent_id,
+                risk_level=RiskLevel.CRITICAL,
+                composite_score=5.0,
+                frequency_score=2.0,
+                entropy_score=1.5,
+                capability_score=1.5,
+                quarantine_recommended=True,
+            ),
+        )
+        mw = RogueDetectionMiddleware(
+            detector=detector, agent_id="rogue-agent",
+        )
+        ctx = _make_function_context(func_name="any_tool")
+        call_next = AsyncMock()
+
+        await mw.process(ctx, call_next)
+
+        assert ctx.metadata["governance_blocked"] is True
+        call_next.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_rogue_quarantine_does_not_raise(
+        self, detector, monkeypatch,
+    ):
+        from agent_sre.anomaly.rogue_detector import RogueAssessment
+
+        monkeypatch.setattr(
+            detector,
+            "assess",
+            lambda agent_id, timestamp=None: RogueAssessment(
+                agent_id=agent_id,
+                risk_level=RiskLevel.CRITICAL,
+                composite_score=5.0,
+                frequency_score=2.0,
+                entropy_score=1.5,
+                capability_score=1.5,
+                quarantine_recommended=True,
+            ),
+        )
+        mw = RogueDetectionMiddleware(
+            detector=detector, agent_id="rogue-agent",
+        )
+        ctx = _make_function_context(func_name="any_tool")
+        call_next = AsyncMock()
+
+        # Should return normally — no exception expected.
+        await mw.process(ctx, call_next)
+
+        assert "quarantined" in ctx.result
+        call_next.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_warns_on_medium_risk(self, detector, monkeypatch):

@@ -96,6 +96,7 @@ class MockFunctionContext:
     def __init__(self, func_name: str = "web_search"):
         self.function = MockFunction(func_name)
         self.result = None
+        self.metadata = {}
 
 
 class MockMessage:
@@ -268,10 +269,12 @@ class TestCapabilityGuardPipeline:
         )
         ctx = MockFunctionContext(func_name="write_file")
 
-        with pytest.raises(MiddlewareTermination):
-            await guard.process(ctx, AsyncMock())
+        call_next = AsyncMock()
+        await guard.process(ctx, call_next)
 
+        call_next.assert_not_called()
         assert "not permitted" in str(ctx.result)
+        assert ctx.metadata.get("governance_blocked") is True
 
     @pytest.mark.asyncio
     async def test_explicit_deny_overrides_allow(self):
@@ -282,8 +285,11 @@ class TestCapabilityGuardPipeline:
         )
         ctx = MockFunctionContext(func_name="write_file")
 
-        with pytest.raises(MiddlewareTermination):
-            await guard.process(ctx, AsyncMock())
+        call_next = AsyncMock()
+        await guard.process(ctx, call_next)
+
+        call_next.assert_not_called()
+        assert ctx.metadata.get("governance_blocked") is True
 
     @pytest.mark.asyncio
     async def test_no_restrictions_allows_all(self):
@@ -439,8 +445,10 @@ class TestRogueDetectionPipeline:
         assessment = detector.assess("suspicious-agent")
         # If quarantine recommended, the middleware should block
         if assessment.quarantine_recommended:
-            with pytest.raises(MiddlewareTermination):
-                await rogue_mw.process(ctx, AsyncMock())
+            call_next = AsyncMock()
+            await rogue_mw.process(ctx, call_next)
+            call_next.assert_not_called()
+            assert ctx.metadata.get("governance_blocked") is True
         # If not (insufficient data), the middleware passes
         else:
             await rogue_mw.process(ctx, AsyncMock())
@@ -899,3 +907,35 @@ class TestPipelineErrorHandling:
 
         await policy_mw.process(ctx, AsyncMock())
         # Should not raise
+
+
+# ============================================================================
+# 11. Cross-Turn Regression — Denial Does Not Corrupt State
+# ============================================================================
+
+
+class TestCrossTurnRegression:
+    """Verify that a denial followed by an allowed call on the same instance works."""
+
+    @pytest.mark.asyncio
+    async def test_capability_guard_allows_after_denial(self):
+        """A denied tool call does not corrupt state for a subsequent allowed call."""
+        guard = CapabilityGuardMiddleware(
+            allowed_tools=["web_search"],
+        )
+
+        # First call: denied tool
+        denied_ctx = MockFunctionContext(func_name="write_file")
+        denied_next = AsyncMock()
+        await guard.process(denied_ctx, denied_next)
+
+        denied_next.assert_not_called()
+        assert denied_ctx.metadata.get("governance_blocked") is True
+
+        # Second call: allowed tool on the same middleware instance
+        allowed_ctx = MockFunctionContext(func_name="web_search")
+        allowed_next = AsyncMock()
+        await guard.process(allowed_ctx, allowed_next)
+
+        allowed_next.assert_called_once()
+        assert allowed_ctx.metadata.get("governance_blocked") is not True

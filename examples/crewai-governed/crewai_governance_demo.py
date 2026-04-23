@@ -377,6 +377,7 @@ class _FunctionContext:
     def __init__(self, function_name: str) -> None:
         self.function = _Function(function_name)
         self.result: str | None = None
+        self.metadata: dict[str, Any] = {}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -448,11 +449,11 @@ async def scenario_1_role_based_access(
         async def tool_exec() -> None:
             ctx.result = f"[simulated result for {tool_name}]"
 
-        try:
-            await cap_middleware.process(ctx, tool_exec)  # type: ignore[arg-type]
-            print(_tree_last("✅", C.GREEN, "Guard", f"{C.GREEN}ALLOWED{C.RESET} — role has {tool_name} capability"))
-        except MiddlewareTermination:
+        await cap_middleware.process(ctx, tool_exec)  # type: ignore[arg-type]
+        if ctx.metadata.get("governance_blocked"):
             print(_tree_last("⛔", C.RED, "Guard", f"{C.RED}DENIED{C.RESET} — {agent_name} cannot use {tool_name}"))
+        else:
+            print(_tree_last("✅", C.GREEN, "Guard", f"{C.GREEN}ALLOWED{C.RESET} — role has {tool_name} capability"))
         print()
 
     entries_logged = len(audit_log._chain._entries) - entries_before
@@ -1285,13 +1286,13 @@ async def scenario_8_capability_escalation(
         async def tool_exec() -> None:
             ctx.result = f"[simulated result for {tool_name}]"
 
-        try:
-            await cap_middleware.process(ctx, tool_exec)  # type: ignore[arg-type]
-            normal += 1
-            print(_tree_last("✅", C.GREEN, "Guard", f"{C.GREEN}ALLOWED{C.RESET} — within capability profile"))
-        except MiddlewareTermination:
+        await cap_middleware.process(ctx, tool_exec)  # type: ignore[arg-type]
+        if ctx.metadata.get("governance_blocked"):
             caught += 1
             print(_tree_last("🛑", C.RED, "Guard", f"{C.RED}BLOCKED{C.RESET} — undeclared capability rejected"))
+        else:
+            normal += 1
+            print(_tree_last("✅", C.GREEN, "Guard", f"{C.GREEN}ALLOWED{C.RESET} — within capability profile"))
         print()
 
     # Check rogue score after all the capability deviations

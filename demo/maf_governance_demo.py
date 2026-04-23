@@ -424,6 +424,7 @@ class _FunctionContext:
     def __init__(self, function_name: str) -> None:
         self.function = _Function(function_name)
         self.result: str | None = None
+        self.metadata: dict[str, Any] = {}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -727,17 +728,15 @@ async def scenario_2_capability_sandboxing(
         async def tool_exec() -> None:
             ctx.result = f"[simulated result for {tool_name}]"
 
-        try:
-            await cap_middleware.process(ctx, tool_exec)  # type: ignore[arg-type]
-            recent = audit_log._chain._entries
-            entry_id = recent[-1].entry_id if recent else "n/a"
-            print(_tree("✅", C.GREEN, "Guard", f"{C.GREEN}ALLOWED{C.RESET}"))
-            print(_tree_last("📝", C.DIM, "Audit", f"Entry #{entry_id[:12]}"))
-        except MiddlewareTermination:
-            recent = audit_log._chain._entries
-            entry_id = recent[-1].entry_id if recent else "n/a"
+        await cap_middleware.process(ctx, tool_exec)  # type: ignore[arg-type]
+        recent = audit_log._chain._entries
+        entry_id = recent[-1].entry_id if recent else "n/a"
+        if ctx.metadata.get("governance_blocked"):
             print(_tree("⛔", C.RED, "Guard", f"{C.RED}DENIED{C.RESET} — tool not in permitted set"))
             print(_tree_last("📝", C.YELLOW, "Audit", f"Entry #{entry_id[:12]} {C.RED}(BLOCKED){C.RESET}"))
+        else:
+            print(_tree("✅", C.GREEN, "Guard", f"{C.GREEN}ALLOWED{C.RESET}"))
+            print(_tree_last("📝", C.DIM, "Audit", f"Entry #{entry_id[:12]}"))
         print()
 
     entries_logged = len(audit_log._chain._entries) - entries_before
@@ -1096,9 +1095,8 @@ async def scenario_adversarial_attacks(
         # For the tool alias attack, also test capability guard
         if attack_name == "Tool Alias Bypass":
             func_ctx = _FunctionContext("shell_execute")
-            try:
-                await cap_middleware.process(func_ctx, adversarial_call)  # type: ignore[arg-type]
-            except MiddlewareTermination:
+            await cap_middleware.process(func_ctx, adversarial_call)  # type: ignore[arg-type]
+            if func_ctx.metadata.get("governance_blocked"):
                 blocked = True
 
         if blocked:

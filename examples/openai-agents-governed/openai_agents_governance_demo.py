@@ -394,6 +394,7 @@ class _FunctionContext:
     def __init__(self, function_name: str) -> None:
         self.function = _Function(function_name)
         self.result: str | None = None
+        self.metadata: dict[str, Any] = {}
 
 
 # ╔═════════════════════════════════════════════════════════════════════════╗
@@ -451,11 +452,11 @@ async def scenario_1_role_based_access(
         async def _noop_ok() -> None:
             fctx_ok.result = "executed"
 
-        try:
-            await guard.process(fctx_ok, _noop_ok)  # type: ignore[arg-type]
-            _tree("[PASS]", C.GREEN, f"{role} -> {allowed_tool}", "ALLOWED")
-        except MiddlewareTermination:
+        await guard.process(fctx_ok, _noop_ok)  # type: ignore[arg-type]
+        if fctx_ok.metadata.get("governance_blocked"):
             _tree("[FAIL]", C.RED, f"{role} -> {allowed_tool}", "unexpectedly blocked")
+        else:
+            _tree("[PASS]", C.GREEN, f"{role} -> {allowed_tool}", "ALLOWED")
 
         # Test denied tool
         fctx_deny = _FunctionContext(denied_tool)
@@ -463,11 +464,11 @@ async def scenario_1_role_based_access(
         async def _noop_deny() -> None:
             fctx_deny.result = "executed"
 
-        try:
-            await guard.process(fctx_deny, _noop_deny)  # type: ignore[arg-type]
-            _tree("[FAIL]", C.RED, f"{role} -> {denied_tool}", "should have been blocked")
-        except MiddlewareTermination:
+        await guard.process(fctx_deny, _noop_deny)  # type: ignore[arg-type]
+        if fctx_deny.metadata.get("governance_blocked"):
             _tree("[PASS]", C.GREEN, f"{role} -> {denied_tool}", "BLOCKED (correct)")
+        else:
+            _tree("[FAIL]", C.RED, f"{role} -> {denied_tool}", "should have been blocked")
 
     # --- Part B: TrustedFunctionGuard from openai-agents-agentmesh ---
     _section("Part B: TrustedFunctionGuard (trust-scored)")
@@ -934,13 +935,13 @@ async def scenario_4_rogue_detection(
     async def _tool_exec() -> None:
         fctx.result = "executed"
 
-    try:
-        await rogue_mw.process(fctx, _tool_exec)  # type: ignore[arg-type]
-        _tree_end("[OK]", C.GREEN, "Post-burst tool call", "ALLOWED (not quarantined)")
-    except MiddlewareTermination:
+    await rogue_mw.process(fctx, _tool_exec)  # type: ignore[arg-type]
+    if fctx.metadata.get("governance_blocked"):
         _tree_end(
             "[BLOCKED]", C.RED, "Post-burst tool call", "BLOCKED (quarantined)"
         )
+    else:
+        _tree_end("[OK]", C.GREEN, "Post-burst tool call", "ALLOWED (not quarantined)")
 
     # --- GovernancePolicy max_tool_calls ---
     _section("GovernancePolicy max_tool_calls limit")
@@ -1088,11 +1089,11 @@ async def scenario_5_full_pipeline(
         async def _tool_ok() -> None:
             fctx.result = "executed"
 
-        try:
-            await guard.process(fctx, _tool_ok)  # type: ignore[arg-type]
-            _tree("[TOOL]", C.GREEN, f"{tool_name}", "ALLOWED")
-        except MiddlewareTermination:
+        await guard.process(fctx, _tool_ok)  # type: ignore[arg-type]
+        if fctx.metadata.get("governance_blocked"):
             _tree("[TOOL]", C.RED, f"{tool_name}", "BLOCKED")
+        else:
+            _tree("[TOOL]", C.GREEN, f"{tool_name}", "ALLOWED")
 
         # Audit log
         audit_log.log(
@@ -1486,11 +1487,11 @@ async def scenario_8_capability_escalation(
         async def _normal_exec() -> None:
             fctx.result = "executed"
 
-        try:
-            await writer_guard.process(fctx, _normal_exec)  # type: ignore[arg-type]
-            _tree("[PASS]", C.GREEN, f"{tool}", "ALLOWED")
-        except MiddlewareTermination:
+        await writer_guard.process(fctx, _normal_exec)  # type: ignore[arg-type]
+        if fctx.metadata.get("governance_blocked"):
             _tree("[FAIL]", C.RED, f"{tool}", "unexpectedly blocked")
+        else:
+            _tree("[PASS]", C.GREEN, f"{tool}", "ALLOWED")
 
         detector.record_action(
             agent_id, tool, tool, timestamp=base_time + i * 1.0
@@ -1522,12 +1523,12 @@ async def scenario_8_capability_escalation(
         async def _esc_exec() -> None:
             fctx.result = "executed"
 
-        try:
-            await writer_guard.process(fctx, _esc_exec)  # type: ignore[arg-type]
-            _tree("[FAIL]", C.RED, f"{tool} ({desc})", "should have been blocked")
-        except MiddlewareTermination:
+        await writer_guard.process(fctx, _esc_exec)  # type: ignore[arg-type]
+        if fctx.metadata.get("governance_blocked"):
             blocked_count += 1
             _tree("[BLOCKED]", C.GREEN, f"{tool} ({desc})", "DENIED by capability guard")
+        else:
+            _tree("[FAIL]", C.RED, f"{tool} ({desc})", "should have been blocked")
 
         # Feed into rogue detector as capability violation
         detector.record_action(
