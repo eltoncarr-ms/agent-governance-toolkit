@@ -24,8 +24,11 @@ from datetime import datetime
 from typing import Any, Optional
 
 from .base import BaseIntegration, GovernancePolicy
+from .tool_aliases import ToolAliasRegistry
 
 logger = logging.getLogger("agent_os.langchain")
+
+_alias_registry = ToolAliasRegistry()
 
 # Patterns used to detect potential PII / secrets in memory writes
 _PII_PATTERNS = [
@@ -155,6 +158,14 @@ class LangChainKernel(BaseIntegration):
         Raises :class:`PolicyViolationError` if the tool is not allowed or
         if its arguments match a blocked pattern.
         """
+        # Blocked-tools deny-list check (takes priority over allowed_tools)
+        if self.policy.blocked_tools and _alias_registry.is_blocked(
+            tool_name, self.policy.blocked_tools
+        ):
+            raise PolicyViolationError(
+                f"Tool '{tool_name}' is blocked by policy"
+            )
+
         # Allowed-tools check
         if self.policy.allowed_tools and tool_name not in self.policy.allowed_tools:
             raise PolicyViolationError(

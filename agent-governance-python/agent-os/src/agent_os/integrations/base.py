@@ -15,13 +15,19 @@ import fnmatch
 import hashlib
 import logging
 import re
+import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Any, Callable, Protocol
 
+from .tool_aliases import ToolAliasRegistry
+
 logger = logging.getLogger(__name__)
+
+# Module-level cached alias registry instance
+_alias_registry = ToolAliasRegistry()
 
 
 class PatternType(Enum):
@@ -87,6 +93,10 @@ class GovernancePolicy:
         allowed_tools: Explicit allowlist of tool names the agent may call.
             An empty list means *all* tools are permitted (subject to other
             constraints).  Defaults to ``[]``.
+        blocked_tools: Explicit deny-list of tool names the agent must not call.
+            Checked before ``allowed_tools`` — if a tool is in both lists,
+            it is blocked (deny takes precedence).  An empty list means no
+            tools are explicitly blocked.  Defaults to ``[]``.
         blocked_patterns: Patterns that must not appear in tool arguments.
             Each entry is either a plain substring string or a
             ``(pattern, PatternType)`` tuple for regex/glob matching.
@@ -150,6 +160,7 @@ class GovernancePolicy:
     max_tokens: int = 4096
     max_tool_calls: int = 10
     allowed_tools: list[str] = field(default_factory=list)
+    blocked_tools: list[str] = field(default_factory=list)
     blocked_patterns: list[str | tuple[str, PatternType]] = field(default_factory=list)
     require_human_approval: bool = False
     timeout_seconds: int = 300
@@ -183,6 +194,7 @@ class GovernancePolicy:
                 self.max_tokens,
                 self.max_tool_calls,
                 tuple(self.allowed_tools),
+                tuple(self.blocked_tools),
                 tuple(self.blocked_patterns),
                 self.require_human_approval,
                 self.timeout_seconds,
@@ -239,6 +251,27 @@ class GovernancePolicy:
                 raise ValueError(
                     f"allowed_tools[{i}] must be a string, got {type(tool).__name__}: {tool!r}"
                 )
+
+        # Validate blocked_tools entries are strings
+        if not isinstance(self.blocked_tools, list):
+            raise ValueError(
+                f"blocked_tools must be a list, got {type(self.blocked_tools).__name__}"
+            )
+        for i, tool in enumerate(self.blocked_tools):
+            if not isinstance(tool, str):
+                raise ValueError(
+                    f"blocked_tools[{i}] must be a string, got {type(tool).__name__}: {tool!r}"
+                )
+
+        # Warn if any tool appears in both allowed and blocked lists
+        overlap = set(self.allowed_tools) & set(self.blocked_tools)
+        if overlap:
+            warnings.warn(
+                f"Tools {overlap} appear in both allowed_tools and blocked_tools. "
+                f"blocked_tools takes precedence at runtime.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         # Validate blocked_patterns entries and precompile regex/glob patterns
         if not isinstance(self.blocked_patterns, list):
@@ -310,6 +343,12 @@ class GovernancePolicy:
                 f"({self.allowed_tools}): tools are allowed but no calls permitted"
             )
 
+        if self.max_tool_calls == 0 and self.blocked_tools:
+            warnings.append(
+                f"max_tool_calls is 0 but blocked_tools is non-empty "
+                f"({self.blocked_tools}): tools are blocked but no calls permitted anyway"
+            )
+
         # Confidence checks effectively disabled
         if self.confidence_threshold == 0.0:
             warnings.append(
@@ -343,6 +382,7 @@ class GovernancePolicy:
             "max_tokens": self.max_tokens,
             "max_tool_calls": self.max_tool_calls,
             "allowed_tools": self.allowed_tools,
+            "blocked_tools": self.blocked_tools,
             "blocked_patterns": [
                 {"pattern": p, "type": t.value} if t != PatternType.SUBSTRING
                 else p
@@ -388,10 +428,10 @@ class GovernancePolicy:
 
         valid_fields = {
             "name", "max_tokens", "max_tool_calls", "allowed_tools",
-            "blocked_patterns", "require_human_approval", "timeout_seconds",
-            "confidence_threshold", "drift_threshold", "log_all_calls",
-            "checkpoint_frequency", "max_concurrent", "backpressure_threshold",
-            "version",
+            "blocked_tools", "blocked_patterns", "require_human_approval",
+            "timeout_seconds", "confidence_threshold", "drift_threshold",
+            "log_all_calls", "checkpoint_frequency", "max_concurrent",
+            "backpressure_threshold", "version",
         }
         filtered = {k: v for k, v in data.items() if k in valid_fields}
         return cls(**filtered)
@@ -416,6 +456,7 @@ class GovernancePolicy:
             "max_tokens": self.max_tokens,
             "max_tool_calls": self.max_tool_calls,
             "allowed_tools": self.allowed_tools,
+            "blocked_tools": self.blocked_tools,
             "blocked_patterns": [
                 {"pattern": p, "type": t.value} if t != PatternType.SUBSTRING
                 else p
@@ -460,10 +501,11 @@ class GovernancePolicy:
 
         # Remove unknown keys
         valid_fields = {
-            "max_tokens", "max_tool_calls", "allowed_tools", "blocked_patterns",
-            "require_human_approval", "timeout_seconds", "confidence_threshold",
-            "drift_threshold", "log_all_calls", "checkpoint_frequency",
-            "max_concurrent", "backpressure_threshold", "version",
+            "name", "max_tokens", "max_tool_calls", "allowed_tools",
+            "blocked_tools", "blocked_patterns", "require_human_approval",
+            "timeout_seconds", "confidence_threshold", "drift_threshold",
+            "log_all_calls", "checkpoint_frequency", "max_concurrent",
+            "backpressure_threshold", "version",
         }
         filtered = {k: v for k, v in data.items() if k in valid_fields}
         return cls(**filtered)
@@ -487,10 +529,11 @@ class GovernancePolicy:
         """
         changes: dict[str, tuple[Any, Any]] = {}
         fields = [
-            "max_tokens", "max_tool_calls", "allowed_tools", "blocked_patterns",
-            "require_human_approval", "timeout_seconds", "confidence_threshold",
-            "drift_threshold", "log_all_calls", "checkpoint_frequency",
-            "max_concurrent", "backpressure_threshold", "version",
+            "max_tokens", "max_tool_calls", "allowed_tools", "blocked_tools",
+            "blocked_patterns", "require_human_approval", "timeout_seconds",
+            "confidence_threshold", "drift_threshold", "log_all_calls",
+            "checkpoint_frequency", "max_concurrent", "backpressure_threshold",
+            "version",
         ]
         for f in fields:
             v_self = getattr(self, f)
@@ -522,6 +565,11 @@ class GovernancePolicy:
                 len(self.allowed_tools) <= len(other.allowed_tools)
                 if other.allowed_tools else True
             )
+        # blocked_tools: blocking a superset of tools is stricter
+        self_blocked = {_alias_registry.canonicalize(t) for t in self.blocked_tools}
+        other_blocked = {_alias_registry.canonicalize(t) for t in other.blocked_tools}
+        if self_blocked or other_blocked:
+            checks.append(self_blocked >= other_blocked)
         # Must be at least one actual difference to be considered stricter
         has_difference = any([
             self.max_tokens < other.max_tokens,
@@ -531,6 +579,7 @@ class GovernancePolicy:
             self.require_human_approval and not other.require_human_approval,
             len(self.blocked_patterns) > len(other.blocked_patterns),
             len(self.allowed_tools) < len(other.allowed_tools) if other.allowed_tools else False,
+            self_blocked > other_blocked if (self_blocked or other_blocked) else False,
         ])
         return all(checks) and has_difference
 
@@ -683,6 +732,15 @@ class PolicyInterceptor:
             return ToolCallResult(
                 allowed=False,
                 reason=f"Tool '{request.tool_name}' requires human approval per governance policy",
+            )
+
+        # Check blocked tools (deny-list takes priority over allow-list)
+        if self.policy.blocked_tools and _alias_registry.is_blocked(
+            request.tool_name, self.policy.blocked_tools
+        ):
+            return ToolCallResult(
+                allowed=False,
+                reason=f"Tool '{request.tool_name}' is blocked by policy",
             )
 
         # Check allowed tools

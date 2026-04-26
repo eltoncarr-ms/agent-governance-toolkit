@@ -20,7 +20,7 @@ _MIN_FIELDS = {"max_tokens", "max_tool_calls", "max_concurrent", "timeout_second
 _BOOL_RESTRICTIVE = {"require_human_approval", "log_all_calls"}
 
 # List fields with special merge semantics
-_UNION_LIST_FIELDS = {"blocked_patterns"}
+_UNION_LIST_FIELDS = {"blocked_patterns", "blocked_tools"}
 _INTERSECT_LIST_FIELDS = {"allowed_tools"}
 
 
