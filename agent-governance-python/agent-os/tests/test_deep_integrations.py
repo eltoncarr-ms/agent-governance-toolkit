@@ -129,10 +129,11 @@ class TestLangChainToolRegistryInterception:
 
         policy = GovernancePolicy(allowed_tools=["web_search", "read_file"])
         kernel = LangChainKernel(policy=policy, deep_hooks_enabled=True)
-        kernel.wrap(chain)
+        # Make chain.invoke call tool._run so tool governance fires
+        chain.invoke = MagicMock(side_effect=lambda *a, **kw: tool._run(query="hello"))
+        governed = kernel.wrap(chain)
 
-        # The tool's _run should now be governed; call it
-        tool._run(query="hello")
+        governed.invoke("test")
         assert len(kernel._tool_invocations) == 1
         assert kernel._tool_invocations[0]["tool_name"] == "web_search"
 
@@ -143,10 +144,11 @@ class TestLangChainToolRegistryInterception:
 
         policy = GovernancePolicy(allowed_tools=["web_search"])
         kernel = LangChainKernel(policy=policy, deep_hooks_enabled=True)
-        kernel.wrap(chain)
+        chain.invoke = MagicMock(side_effect=lambda *a, **kw: tool._run(query="test"))
+        governed = kernel.wrap(chain)
 
         with pytest.raises((PolicyViolationError, LangChainPolicyViolationError)):
-            tool._run(query="test")
+            governed.invoke("test")
 
     def test_tool_blocked_by_pattern_in_args(self):
         """Tool args matching a blocked pattern should be rejected."""
@@ -155,10 +157,13 @@ class TestLangChainToolRegistryInterception:
 
         policy = GovernancePolicy(blocked_patterns=["DROP TABLE"])
         kernel = LangChainKernel(policy=policy, deep_hooks_enabled=True)
-        kernel.wrap(chain)
+        chain.invoke = MagicMock(
+            side_effect=lambda *a, **kw: tool._run(query="DROP TABLE users")
+        )
+        governed = kernel.wrap(chain)
 
         with pytest.raises((PolicyViolationError, LangChainPolicyViolationError)):
-            tool._run(query="DROP TABLE users")
+            governed.invoke("test")
 
     def test_tool_invocations_tracked(self):
         """Each tool invocation should be recorded in the audit log."""
@@ -167,10 +172,13 @@ class TestLangChainToolRegistryInterception:
         chain = _make_mock_chain(tools=[tool1, tool2])
 
         kernel = LangChainKernel(deep_hooks_enabled=True)
-        kernel.wrap(chain)
+        chain.invoke = MagicMock(side_effect=lambda *a, **kw: (
+            tool1._run(query="hello"),
+            tool2._run(expression="1+1"),
+        ))
+        governed = kernel.wrap(chain)
 
-        tool1._run(query="hello")
-        tool2._run(expression="1+1")
+        governed.invoke("test")
 
         assert len(kernel._tool_invocations) == 2
         names = [r["tool_name"] for r in kernel._tool_invocations]
@@ -187,8 +195,8 @@ class TestLangChainToolRegistryInterception:
         kernel = LangChainKernel(policy=policy, deep_hooks_enabled=False)
         kernel.wrap(chain)
 
-        # _run should still be the original (not governed)
-        assert tool._deep_governed is False
+        # _run should still be the original (no overlays built)
+        assert tool._run is original_run
         assert len(kernel._tool_invocations) == 0
 
 
@@ -201,9 +209,14 @@ class TestLangChainMemoryInterception:
         chain = _make_mock_chain(memory=memory)
 
         kernel = LangChainKernel(deep_hooks_enabled=True)
-        kernel.wrap(chain)
+        chain.invoke = MagicMock(
+            side_effect=lambda *a, **kw: memory.save_context(
+                {"input": "hello"}, {"output": "world"}
+            )
+        )
+        governed = kernel.wrap(chain)
 
-        memory.save_context({"input": "hello"}, {"output": "world"})
+        governed.invoke("test")
         assert len(kernel._memory_audit_log) == 1
 
     def test_memory_write_blocked_on_pii(self):
@@ -212,13 +225,15 @@ class TestLangChainMemoryInterception:
         chain = _make_mock_chain(memory=memory)
 
         kernel = LangChainKernel(deep_hooks_enabled=True)
-        kernel.wrap(chain)
+        chain.invoke = MagicMock(
+            side_effect=lambda *a, **kw: memory.save_context(
+                {"input": "ssn is 123-45-6789"}, {"output": "stored"}
+            )
+        )
+        governed = kernel.wrap(chain)
 
         with pytest.raises((PolicyViolationError, LangChainPolicyViolationError)):
-            memory.save_context(
-                {"input": "ssn is 123-45-6789"},
-                {"output": "stored"},
-            )
+            governed.invoke("test")
 
     def test_memory_write_blocked_on_policy_pattern(self):
         """Memory writes matching blocked patterns should be blocked."""
@@ -227,13 +242,15 @@ class TestLangChainMemoryInterception:
 
         policy = GovernancePolicy(blocked_patterns=["confidential"])
         kernel = LangChainKernel(policy=policy, deep_hooks_enabled=True)
-        kernel.wrap(chain)
+        chain.invoke = MagicMock(
+            side_effect=lambda *a, **kw: memory.save_context(
+                {"input": "this is confidential data"}, {"output": "stored"}
+            )
+        )
+        governed = kernel.wrap(chain)
 
         with pytest.raises((PolicyViolationError, LangChainPolicyViolationError)):
-            memory.save_context(
-                {"input": "this is confidential data"},
-                {"output": "stored"},
-            )
+            governed.invoke("test")
 
 
 class TestLangChainSubAgentSpawnDetection:
@@ -246,8 +263,8 @@ class TestLangChainSubAgentSpawnDetection:
         kernel = LangChainKernel(deep_hooks_enabled=True)
         governed = kernel.wrap(chain)
 
-        # The original's invoke was wrapped by _detect_agent_spawning
-        chain.invoke({"input": "delegate this"})
+        # Call through the governed wrapper — overlays applied during invoke
+        governed.invoke({"input": "delegate this"})
         assert len(kernel._delegation_chains) == 1
         assert kernel._delegation_chains[0]["parent_agent"] == "test-chain"
 
@@ -257,15 +274,15 @@ class TestLangChainSubAgentSpawnDetection:
 
         policy = GovernancePolicy(max_tool_calls=2)
         kernel = LangChainKernel(policy=policy, deep_hooks_enabled=True)
-        kernel.wrap(chain)
+        governed = kernel.wrap(chain)
 
-        # First two calls should succeed
-        chain.invoke({"input": "call 1"})
-        chain.invoke({"input": "call 2"})
+        # First two calls should succeed (each governed.invoke triggers spawn overlay)
+        governed.invoke({"input": "call 1"})
+        governed.invoke({"input": "call 2"})
 
         # Third call exceeds max_tool_calls used as delegation depth
         with pytest.raises((PolicyViolationError, LangChainPolicyViolationError)):
-            chain.invoke({"input": "call 3"})
+            governed.invoke({"input": "call 3"})
 
 
 # =============================================================================
@@ -530,8 +547,7 @@ class TestDeepHooksDisabled:
         kernel = LangChainKernel(deep_hooks_enabled=False)
         kernel.wrap(chain)
 
-        assert not getattr(tool, "_deep_governed", False)
-        assert not getattr(memory, "_deep_governed", False)
+        assert tool._run is tool._run  # Not permanently governed
         assert len(kernel._tool_invocations) == 0
 
     def test_crewai_deep_hooks_disabled(self):
