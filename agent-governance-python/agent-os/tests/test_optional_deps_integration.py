@@ -218,8 +218,9 @@ class TestLangChainDeepHooks:
         chain = self._make_chain(tools=[tool])
 
         governed = kernel.wrap(chain)
-        # Tool should be marked as governed
-        assert tool._deep_governed is True
+        # Overlays should have been built (not permanent mutation)
+        assert hasattr(governed, '_overlays')
+        assert len(governed._overlays) > 0
 
     def test_blocked_tool_not_in_allowlist(self):
         """Tool not in allowed_tools is blocked."""
@@ -233,8 +234,9 @@ class TestLangChainDeepHooks:
         chain = self._make_chain(tools=[tool])
 
         governed = kernel.wrap(chain)
-        # The tool should be wrapped; actual blocking happens on invocation
-        assert tool._deep_governed is True
+        # Overlays should have been built; actual blocking happens on invocation
+        assert hasattr(governed, '_overlays')
+        assert len(governed._overlays) > 0
 
     def test_memory_write_interception(self):
         """Memory writes are intercepted when deep hooks enabled."""
@@ -245,7 +247,11 @@ class TestLangChainDeepHooks:
         chain = self._make_chain(memory=memory)
 
         governed = kernel.wrap(chain)
-        assert memory._deep_governed is True
+        # Memory overlay should have been built
+        assert hasattr(governed, '_overlays')
+        # Check that at least one overlay targets save_context
+        memory_overlays = [o for o in governed._overlays if o[1] == "save_context"]
+        assert len(memory_overlays) > 0
 
     def test_no_deep_hooks_when_disabled(self):
         """Deep hooks are not applied when disabled."""
@@ -256,7 +262,8 @@ class TestLangChainDeepHooks:
         chain = self._make_chain(tools=[tool])
 
         governed = kernel.wrap(chain)
-        assert tool._deep_governed is False
+        # No overlays should be built when deep hooks disabled
+        assert len(governed._overlays) == 0
 
 
 # ============================================================================
