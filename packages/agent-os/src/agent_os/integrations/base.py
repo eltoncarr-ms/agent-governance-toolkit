@@ -14,6 +14,7 @@ import difflib
 import fnmatch
 import hashlib
 import logging
+import os
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -413,6 +414,7 @@ class GovernancePolicy:
         import yaml
 
         data = {
+            "name": self.name,
             "max_tokens": self.max_tokens,
             "max_tool_calls": self.max_tool_calls,
             "allowed_tools": self.allowed_tools,
@@ -460,7 +462,7 @@ class GovernancePolicy:
 
         # Remove unknown keys
         valid_fields = {
-            "max_tokens", "max_tool_calls", "allowed_tools", "blocked_patterns",
+            "name", "max_tokens", "max_tool_calls", "allowed_tools", "blocked_patterns",
             "require_human_approval", "timeout_seconds", "confidence_threshold",
             "drift_threshold", "log_all_calls", "checkpoint_frequency",
             "max_concurrent", "backpressure_threshold", "version",
@@ -498,6 +500,38 @@ class GovernancePolicy:
             if v_self != v_other:
                 changes[f] = (v_self, v_other)
         return changes
+
+    @classmethod
+    def observe_only(cls, name: str = "observe-only", **overrides) -> GovernancePolicy:
+        """Create a permissive policy for observation/audit without blocking.
+
+        Sets confidence_threshold=0.0, high tool call and token limits,
+        and enables full logging. Intended for initial integration where
+        the goal is to observe agent behavior before adding restrictions.
+
+        Note: max_tool_calls, timeout_seconds, and blocked_patterns are
+        still enforced as safety rails (set to 100 calls, 600s, and []
+        respectively). Override these if your agent legitimately needs
+        higher limits.
+
+        Args:
+            name: Policy name for audit trail identification.
+            **overrides: Override any default field value.
+
+        Returns:
+            A GovernancePolicy configured for observe-only mode.
+        """
+        defaults = dict(
+            name=name,
+            confidence_threshold=0.0,
+            max_tool_calls=100,
+            max_tokens=100_000,
+            timeout_seconds=600,
+            log_all_calls=True,
+            require_human_approval=False,
+        )
+        defaults.update(overrides)
+        return cls(**defaults)
 
     def is_stricter_than(self, other: GovernancePolicy) -> bool:
         """Return True if this policy is more restrictive than other.
@@ -876,6 +910,92 @@ class BaseIntegration(ABC):
         self._signal_handlers: dict[str, Callable[..., Any]] = {}
         self._event_listeners: dict[GovernanceEventType, list[Callable[..., Any]]] = {}
 
+    @classmethod
+    def from_policy_file(
+        cls,
+        path: str | os.PathLike[str],
+        *,
+        audit_path: str | os.PathLike[str] | None = None,
+        **kwargs: Any,
+    ) -> BaseIntegration:
+        """Create a fully configured kernel from a policy YAML file.
+
+        Loads the governance policy, optionally sets up audit logging
+        with JSONL + Python logging backends, and wires governance events
+        to the audit logger.
+
+        This factory is inherited by all framework adapters. Adapter-specific
+        constructor parameters (e.g., ``timeout_seconds`` for LangChainKernel)
+        are forwarded via ``**kwargs``.
+
+        Args:
+            path: Path to a GovernancePolicy YAML file.
+            audit_path: When provided, creates a GovernanceAuditLogger
+                with JsonlFileBackend at this path plus a LoggingBackend.
+                The logger is stored as ``self.audit_logger`` and governance
+                events are automatically forwarded to it.
+            **kwargs: Additional keyword arguments passed to the adapter's
+                ``__init__`` (e.g., ``timeout_seconds``, ``deep_hooks_enabled``).
+
+        Returns:
+            A configured instance of the calling class (the specific adapter).
+
+        Raises:
+            FileNotFoundError: If the policy file does not exist.
+
+        Examples::
+
+            # LangChain — timeout_seconds flows through
+            kernel = LangChainKernel.from_policy_file(
+                "policy.yaml", audit_path="audit.jsonl", timeout_seconds=300,
+            )
+
+            # Minimal — no audit
+            kernel = OpenAIKernel.from_policy_file("policy.yaml")
+        """
+        from pathlib import Path as _Path
+
+        policy_path = _Path(path)
+        if not policy_path.exists():
+            raise FileNotFoundError(f"Policy file not found: {policy_path}")
+
+        # Allow subclass overrides to pre-load policy and pass it via kwargs
+        policy = kwargs.pop("policy", None)
+        if policy is None:
+            policy = GovernancePolicy.load(str(policy_path))
+
+        kernel = cls(policy=policy, **kwargs)
+        kernel.audit_logger = None
+
+        if audit_path is not None:
+            from agent_os.audit_logger import (
+                GovernanceAuditLogger,
+                JsonlFileBackend,
+                LoggingBackend,
+            )
+
+            audit = GovernanceAuditLogger()
+            audit.add_backend(JsonlFileBackend(str(audit_path)))
+            audit.add_backend(LoggingBackend())
+            kernel.audit_logger = audit
+
+            # Wire governance events → audit
+            def _audit_event(event_type_name: str) -> Callable[..., Any]:
+                def handler(data: dict[str, Any]) -> None:
+                    audit.log_decision(
+                        agent_id=data.get("agent_id", ""),
+                        action=data.get("phase", event_type_name),
+                        decision="allow" if "violation" not in event_type_name else "deny",
+                        reason=data.get("reason", ""),
+                    )
+                    audit.flush()
+                return handler
+
+            for evt in GovernanceEventType:
+                kernel.on(evt, _audit_event(evt.value))
+
+        return kernel
+
     @abstractmethod
     def wrap(self, agent: Any) -> Any:
         """
@@ -923,6 +1043,37 @@ class BaseIntegration(ABC):
                     "Governance event listener error for %s: %s",
                     event_type, exc, exc_info=True,
                 )
+
+    def govern(
+        self,
+        fn: Callable[..., Any],
+        agent_id: str = "direct-action",
+    ) -> AsyncGovernedWrapper:
+        """Wrap an async callable with governance pre/post checks.
+
+        Use this to govern non-agent code paths (direct API calls,
+        background tasks, etc.) that bypass the framework adapter's
+        ``wrap()`` method.
+
+        The returned wrapper:
+        - Calls ``pre_execute()`` before ``fn``
+        - Calls ``post_execute()`` after ``fn``
+        - Raises ``PolicyViolationError`` if either check fails
+        - Tracks call count, drift, and checkpoints
+
+        Args:
+            fn: An async callable to govern.
+            agent_id: Identifier for audit trail correlation.
+
+        Returns:
+            An ``AsyncGovernedWrapper`` that can be called like ``fn``.
+
+        Example::
+
+            governed_checkout = kernel.govern(client.checkout, agent_id="checkout-action")
+            result = await governed_checkout(product_id, quantity=1)
+        """
+        return AsyncGovernedWrapper(self, fn, agent_id=agent_id)
 
     def pre_execute(self, ctx: ExecutionContext, input_data: Any) -> tuple[bool, str | None]:
         """

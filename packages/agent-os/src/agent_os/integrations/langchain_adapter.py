@@ -75,77 +75,84 @@ class LangChainKernel(BaseIntegration):
         self._memory_audit_log: list[dict[str, Any]] = []
         self._delegation_chains: list[dict[str, Any]] = []
 
-    # ── Deep Integration Hooks ────────────────────────────────────
+    # ── Deep Integration Hooks (Overlay Pattern) ────────────────
 
-    def _intercept_tool_registry(self, agent: Any, ctx: Any) -> None:
-        """Intercept the agent's tool registry to apply per-tool governance.
+    @classmethod
+    def from_policy_file(cls, path, *, audit_path=None, **kwargs):
+        """Create a LangChainKernel from a policy YAML file.
 
-        After the agent is wrapped this method inspects its ``tools``
-        attribute.  Each tool's ``_run`` and ``_arun`` methods are replaced
-        with governed wrappers that:
+        Overrides the base implementation to auto-align
+        ``timeout_seconds`` with the policy's value when not
+        explicitly provided.
 
-        * Check the tool name against ``blocked_patterns`` in the active
-          policy before every invocation.
-        * Track each invocation (tool name, arguments, timestamp) in
-          :attr:`_tool_invocations`.
-        * Respect the ``allowed_tools`` allowlist when configured.
-
-        Args:
-            agent: The underlying LangChain agent / runnable.
-            ctx: The :class:`ExecutionContext` for governance checks.
+        See :meth:`BaseIntegration.from_policy_file` for full docs.
         """
+        from pathlib import Path as _Path
+
+        policy_path = _Path(path)
+        if not policy_path.exists():
+            raise FileNotFoundError(f"Policy file not found: {policy_path}")
+
+        with open(str(policy_path), "r", encoding="utf-8") as f:
+            policy = GovernancePolicy.from_yaml(f.read())
+
+        if "timeout_seconds" not in kwargs:
+            kwargs["timeout_seconds"] = policy.timeout_seconds
+
+        kwargs["policy"] = policy
+        return super().from_policy_file(path, audit_path=audit_path, **kwargs)
+
+    def _build_tool_overlays(self, agent: Any, ctx: Any) -> list[tuple[Any, str, Any, Any]]:
+        """Build per-tool governed wrappers without mutating tool objects.
+
+        Returns a list of (obj, attr_name, original, governed) tuples that
+        can be applied/restored around each governed entrypoint.
+        """
+        overlays: list[tuple[Any, str, Any, Any]] = []
         tools = getattr(agent, "tools", None)
         if not tools:
-            return
+            return overlays
 
         for tool in tools:
-            if getattr(tool, "_deep_governed", False):
-                continue
             tool_name = getattr(tool, "name", type(tool).__name__)
-            self._wrap_tool_method(tool, tool_name, "_run", ctx)
-            self._wrap_tool_method(tool, tool_name, "_arun", ctx, is_async=True)
-            tool._deep_governed = True
-            logger.debug("Deep-governed tool registered: %s", tool_name)
+            for method_name, is_async in [("_run", False), ("_arun", True)]:
+                original = getattr(tool, method_name, None)
+                if original is None:
+                    continue
+                governed = self._make_governed_tool_method(
+                    original, tool_name, method_name, ctx, is_async
+                )
+                overlays.append((tool, method_name, original, governed))
+            logger.debug("Built tool overlay for: %s", tool_name)
+        return overlays
 
-    def _wrap_tool_method(
+    def _make_governed_tool_method(
         self,
-        tool: Any,
+        original: Any,
         tool_name: str,
         method_name: str,
         ctx: Any,
         is_async: bool = False,
-    ) -> None:
-        """Replace a single tool method with a governed wrapper.
-
-        Args:
-            tool: The LangChain tool object.
-            tool_name: Human-readable tool name for logging/audit.
-            method_name: The attribute to patch (``"_run"`` or ``"_arun"``).
-            ctx: Execution context.
-            is_async: Whether the target method is a coroutine.
-        """
-        original_method = getattr(tool, method_name, None)
-        if original_method is None:
-            return
-
+    ) -> Any:
+        """Create a governed wrapper for a tool method."""
         kernel = self
 
         if is_async:
-            @functools.wraps(original_method)
+            @functools.wraps(original)
             async def governed_async(*args: Any, **kwargs: Any) -> Any:
                 kernel._check_tool_policy(tool_name, args, kwargs, ctx)
                 kernel._record_tool_invocation(tool_name, args, kwargs)
-                return await original_method(*args, **kwargs)
-
-            setattr(tool, method_name, governed_async)
+                ctx.call_count += 1
+                return await original(*args, **kwargs)
+            return governed_async
         else:
-            @functools.wraps(original_method)
+            @functools.wraps(original)
             def governed_sync(*args: Any, **kwargs: Any) -> Any:
                 kernel._check_tool_policy(tool_name, args, kwargs, ctx)
                 kernel._record_tool_invocation(tool_name, args, kwargs)
-                return original_method(*args, **kwargs)
-
-            setattr(tool, method_name, governed_sync)
+                ctx.call_count += 1
+                return original(*args, **kwargs)
+            return governed_sync
 
     def _check_tool_policy(
         self, tool_name: str, args: Any, kwargs: Any, ctx: Any
@@ -192,36 +199,24 @@ class LangChainKernel(BaseIntegration):
 
     # ── Memory Write Interception ─────────────────────────────────
 
-    def _intercept_memory(self, agent: Any, ctx: Any) -> None:
-        """Intercept memory writes on the wrapped agent.
+    def _build_memory_overlays(self, agent: Any, ctx: Any) -> list[tuple[Any, str, Any, Any]]:
+        """Build memory governance overlays without mutating memory objects.
 
-        If the underlying object exposes a ``memory`` attribute with a
-        ``save_context`` method, that method is replaced with a governed
-        wrapper that:
-
-        * Validates the data being written against PII / secret patterns.
-        * Checks data against ``blocked_patterns`` in the active policy.
-        * Logs every memory write to :attr:`_memory_audit_log`.
-
-        Args:
-            agent: The underlying LangChain agent / chain.
-            ctx: The :class:`ExecutionContext` for governance checks.
+        Returns overlay tuples for memory.save_context if memory exists.
         """
+        overlays: list[tuple[Any, str, Any, Any]] = []
         memory = getattr(agent, "memory", None)
-        if memory is None:
-            return
+        if memory is None or not hasattr(memory, "save_context"):
+            return overlays
 
-        save_context = getattr(memory, "save_context", None)
-        if save_context is None or getattr(memory, "_deep_governed", False):
-            return
-
+        original_save = memory.save_context
         kernel = self
 
-        @functools.wraps(save_context)
+        @functools.wraps(original_save)
         def governed_save_context(inputs: Any, outputs: Any) -> Any:
             """Governed wrapper around ``memory.save_context``."""
             kernel._validate_memory_write(inputs, outputs, ctx)
-            result = save_context(inputs, outputs)
+            result = original_save(inputs, outputs)
             kernel._memory_audit_log.append({
                 "action": "save_context",
                 "inputs_summary": str(inputs)[:200],
@@ -234,8 +229,9 @@ class LangChainKernel(BaseIntegration):
             )
             return result
 
-        memory.save_context = governed_save_context
-        memory._deep_governed = True
+        overlays.append((memory, "save_context", original_save, governed_save_context))
+        logger.debug("Built memory overlay for agent %s", ctx.agent_id)
+        return overlays
 
     def _validate_memory_write(
         self, inputs: Any, outputs: Any, ctx: Any
@@ -269,36 +265,26 @@ class LangChainKernel(BaseIntegration):
 
     # ── Sub-agent Spawn Detection ─────────────────────────────────
 
-    def _detect_agent_spawning(self, agent: Any, ctx: Any) -> None:
-        """Wrap ``invoke`` calls to detect and govern sub-agent delegation.
+    def _build_spawn_overlays(self, agent: Any, ctx: Any) -> list[tuple[Any, str, Any, Any]]:
+        """Build spawn detection overlays without mutating agent objects.
 
-        Monitors the agent's ``invoke`` method (if present on the original
-        object) for delegation patterns.  Each invocation increments a
-        depth counter and is checked against the policy's
-        ``max_tool_calls`` as a proxy for maximum delegation depth.
-
-        Delegation chains are recorded in :attr:`_delegation_chains`.
-
-        Args:
-            agent: The underlying LangChain agent / runnable.
-            ctx: The :class:`ExecutionContext` for governance checks.
+        Returns overlay tuples for agent.invoke if it exists.
         """
+        overlays: list[tuple[Any, str, Any, Any]] = []
         original_invoke = getattr(agent, "invoke", None)
-        if original_invoke is None or getattr(agent, "_spawn_governed", False):
-            return
+        if original_invoke is None:
+            return overlays
 
         kernel = self
-        max_depth = self.policy.max_tool_calls  # reuse as delegation depth cap
+        max_depth = self.policy.max_tool_calls
 
         @functools.wraps(original_invoke)
         def governed_invoke(input_data: Any, **kwargs: Any) -> Any:
-            # Track delegation depth via ctx metadata
             depth = len(kernel._delegation_chains) + 1
             if depth > max_depth:
                 raise PolicyViolationError(
                     f"Max delegation depth ({max_depth}) exceeded at depth {depth}"
                 )
-
             chain_record = {
                 "parent_agent": ctx.agent_id,
                 "depth": depth,
@@ -310,11 +296,11 @@ class LangChainKernel(BaseIntegration):
                 "Sub-agent delegation detected: agent=%s depth=%d",
                 ctx.agent_id, depth,
             )
-
             return original_invoke(input_data, **kwargs)
 
-        agent.invoke = governed_invoke
-        agent._spawn_governed = True
+        overlays.append((agent, "invoke", original_invoke, governed_invoke))
+        logger.debug("Built spawn overlay for agent %s", ctx.agent_id)
+        return overlays
 
     # ── wrap / unwrap ─────────────────────────────────────────────
 
@@ -365,20 +351,21 @@ class LangChainKernel(BaseIntegration):
         # Store original
         self._wrapped_agents[id(agent)] = agent
 
-        # Apply deep hooks before creating the wrapper class
+        # Build overlays without mutating objects
+        overlays: list[tuple[Any, str, Any, Any]] = []
         if self.deep_hooks_enabled:
             try:
-                self._intercept_tool_registry(agent, ctx)
+                overlays.extend(self._build_tool_overlays(agent, ctx))
             except Exception as exc:
-                logger.warning("Tool registry interception failed: %s", exc)
+                logger.warning("Tool overlay build failed: %s", exc)
             try:
-                self._intercept_memory(agent, ctx)
+                overlays.extend(self._build_memory_overlays(agent, ctx))
             except Exception as exc:
-                logger.warning("Memory interception failed: %s", exc)
+                logger.warning("Memory overlay build failed: %s", exc)
             try:
-                self._detect_agent_spawning(agent, ctx)
+                overlays.extend(self._build_spawn_overlays(agent, ctx))
             except Exception as exc:
-                logger.warning("Agent spawn detection setup failed: %s", exc)
+                logger.warning("Spawn overlay build failed: %s", exc)
 
         # Create wrapper class
         original = agent
@@ -391,6 +378,18 @@ class LangChainKernel(BaseIntegration):
                 self._original = original
                 self._ctx = ctx
                 self._kernel = kernel
+                self._overlays = overlays
+                self._lock = asyncio.Lock()
+
+            def _apply_overlays(self):
+                """Apply governed wrappers to tool/memory/agent objects."""
+                for obj, attr, _original, governed in self._overlays:
+                    setattr(obj, attr, governed)
+
+            def _restore_overlays(self):
+                """Restore original methods on tool/memory/agent objects."""
+                for obj, attr, orig, _governed in self._overlays:
+                    setattr(obj, attr, orig)
 
             def invoke(self, input_data: Any, **kwargs) -> Any:
                 """Governed synchronous invocation.
@@ -407,29 +406,33 @@ class LangChainKernel(BaseIntegration):
                     PolicyViolationError: If the input or output violates
                         governance policy.
                 """
-                logger.debug("invoke called with input=%r kwargs=%r", input_data, kwargs)
-                # Pre-check
-                allowed, reason = self._kernel.pre_execute(self._ctx, input_data)
-                if not allowed:
-                    logger.info("Policy DENY on invoke: %s", reason)
-                    raise PolicyViolationError(reason)
-                logger.info("Policy ALLOW on invoke")
-
-                # Execute
+                self._apply_overlays()
                 try:
-                    result = self._original.invoke(input_data, **kwargs)
-                except Exception as exc:
-                    logger.error("invoke failed: %s", exc)
-                    self._kernel._last_error = str(exc)
-                    raise
+                    logger.debug("invoke called with input=%r kwargs=%r", input_data, kwargs)
+                    # Pre-check
+                    allowed, reason = self._kernel.pre_execute(self._ctx, input_data)
+                    if not allowed:
+                        logger.info("Policy DENY on invoke: %s", reason)
+                        raise PolicyViolationError(reason)
+                    logger.info("Policy ALLOW on invoke")
 
-                # Post-check
-                valid, reason = self._kernel.post_execute(self._ctx, result)
-                if not valid:
-                    logger.info("Policy DENY on invoke result: %s", reason)
-                    raise PolicyViolationError(reason)
+                    # Execute
+                    try:
+                        result = self._original.invoke(input_data, **kwargs)
+                    except Exception as exc:
+                        logger.error("invoke failed: %s", exc)
+                        self._kernel._last_error = str(exc)
+                        raise
 
-                return result
+                    # Post-check
+                    valid, reason = self._kernel.post_execute(self._ctx, result)
+                    if not valid:
+                        logger.info("Policy DENY on invoke result: %s", reason)
+                        raise PolicyViolationError(reason)
+
+                    return result
+                finally:
+                    self._restore_overlays()
 
             async def ainvoke(self, input_data: Any, **kwargs) -> Any:
                 """Governed asynchronous invocation.
@@ -450,35 +453,40 @@ class LangChainKernel(BaseIntegration):
                         governance policy.
                     asyncio.TimeoutError: If the operation exceeds the timeout.
                 """
-                logger.debug("ainvoke called with input=%r kwargs=%r", input_data, kwargs)
-                allowed, reason = self._kernel.pre_execute(self._ctx, input_data)
-                if not allowed:
-                    logger.info("Policy DENY on ainvoke: %s", reason)
-                    raise PolicyViolationError(reason)
-                logger.info("Policy ALLOW on ainvoke")
-
+                self._apply_overlays()
                 try:
-                    result = await asyncio.wait_for(
-                        self._original.ainvoke(input_data, **kwargs),
-                        timeout=self._kernel.timeout_seconds,
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning(
-                        "ainvoke timed out after %ss", self._kernel.timeout_seconds
-                    )
-                    self._kernel._last_error = "timeout"
-                    raise
-                except Exception as exc:
-                    logger.error("ainvoke failed: %s", exc)
-                    self._kernel._last_error = str(exc)
-                    raise
+                    async with self._lock:
+                        logger.debug("ainvoke called with input=%r kwargs=%r", input_data, kwargs)
+                        allowed, reason = self._kernel.pre_execute(self._ctx, input_data)
+                        if not allowed:
+                            logger.info("Policy DENY on ainvoke: %s", reason)
+                            raise PolicyViolationError(reason)
+                        logger.info("Policy ALLOW on ainvoke")
 
-                valid, reason = self._kernel.post_execute(self._ctx, result)
-                if not valid:
-                    logger.info("Policy DENY on ainvoke result: %s", reason)
-                    raise PolicyViolationError(reason)
+                        try:
+                            result = await asyncio.wait_for(
+                                self._original.ainvoke(input_data, **kwargs),
+                                timeout=self._kernel.timeout_seconds,
+                            )
+                        except asyncio.TimeoutError:
+                            logger.warning(
+                                "ainvoke timed out after %ss", self._kernel.timeout_seconds
+                            )
+                            self._kernel._last_error = "timeout"
+                            raise
+                        except Exception as exc:
+                            logger.error("ainvoke failed: %s", exc)
+                            self._kernel._last_error = str(exc)
+                            raise
 
-                return result
+                        valid, reason = self._kernel.post_execute(self._ctx, result)
+                        if not valid:
+                            logger.info("Policy DENY on ainvoke result: %s", reason)
+                            raise PolicyViolationError(reason)
+
+                        return result
+                finally:
+                    self._restore_overlays()
 
             def run(self, *args, **kwargs) -> Any:
                 """Governed run for legacy LangChain agents.
@@ -496,27 +504,31 @@ class LangChainKernel(BaseIntegration):
                     PolicyViolationError: If the input or output violates
                         governance policy.
                 """
-                input_data = args[0] if args else kwargs
-                logger.debug("run called with input=%r", input_data)
-                allowed, reason = self._kernel.pre_execute(self._ctx, input_data)
-                if not allowed:
-                    logger.info("Policy DENY on run: %s", reason)
-                    raise PolicyViolationError(reason)
-                logger.info("Policy ALLOW on run")
-
+                self._apply_overlays()
                 try:
-                    result = self._original.run(*args, **kwargs)
-                except Exception as exc:
-                    logger.error("run failed: %s", exc)
-                    self._kernel._last_error = str(exc)
-                    raise
+                    input_data = args[0] if args else kwargs
+                    logger.debug("run called with input=%r", input_data)
+                    allowed, reason = self._kernel.pre_execute(self._ctx, input_data)
+                    if not allowed:
+                        logger.info("Policy DENY on run: %s", reason)
+                        raise PolicyViolationError(reason)
+                    logger.info("Policy ALLOW on run")
 
-                valid, reason = self._kernel.post_execute(self._ctx, result)
-                if not valid:
-                    logger.info("Policy DENY on run result: %s", reason)
-                    raise PolicyViolationError(reason)
+                    try:
+                        result = self._original.run(*args, **kwargs)
+                    except Exception as exc:
+                        logger.error("run failed: %s", exc)
+                        self._kernel._last_error = str(exc)
+                        raise
 
-                return result
+                    valid, reason = self._kernel.post_execute(self._ctx, result)
+                    if not valid:
+                        logger.info("Policy DENY on run result: %s", reason)
+                        raise PolicyViolationError(reason)
+
+                    return result
+                finally:
+                    self._restore_overlays()
 
             def batch(self, inputs: list, **kwargs) -> list:
                 """Governed batch execution.
@@ -536,28 +548,32 @@ class LangChainKernel(BaseIntegration):
                     PolicyViolationError: If any input or output in the
                         batch violates governance policy.
                 """
-                logger.debug("batch called with %d inputs", len(inputs))
-                for inp in inputs:
-                    allowed, reason = self._kernel.pre_execute(self._ctx, inp)
-                    if not allowed:
-                        logger.info("Policy DENY on batch input: %s", reason)
-                        raise PolicyViolationError(reason)
-                logger.info("Policy ALLOW on batch (%d inputs)", len(inputs))
-
+                self._apply_overlays()
                 try:
-                    results = self._original.batch(inputs, **kwargs)
-                except Exception as exc:
-                    logger.error("batch failed: %s", exc)
-                    self._kernel._last_error = str(exc)
-                    raise
+                    logger.debug("batch called with %d inputs", len(inputs))
+                    for inp in inputs:
+                        allowed, reason = self._kernel.pre_execute(self._ctx, inp)
+                        if not allowed:
+                            logger.info("Policy DENY on batch input: %s", reason)
+                            raise PolicyViolationError(reason)
+                    logger.info("Policy ALLOW on batch (%d inputs)", len(inputs))
 
-                for result in results:
-                    valid, reason = self._kernel.post_execute(self._ctx, result)
-                    if not valid:
-                        logger.info("Policy DENY on batch result: %s", reason)
-                        raise PolicyViolationError(reason)
+                    try:
+                        results = self._original.batch(inputs, **kwargs)
+                    except Exception as exc:
+                        logger.error("batch failed: %s", exc)
+                        self._kernel._last_error = str(exc)
+                        raise
 
-                return results
+                    for result in results:
+                        valid, reason = self._kernel.post_execute(self._ctx, result)
+                        if not valid:
+                            logger.info("Policy DENY on batch result: %s", reason)
+                            raise PolicyViolationError(reason)
+
+                    return results
+                finally:
+                    self._restore_overlays()
 
             def stream(self, input_data: Any, **kwargs):
                 """Governed streaming execution.
@@ -578,16 +594,20 @@ class LangChainKernel(BaseIntegration):
                     PolicyViolationError: If the input violates governance
                         policy.
                 """
-                logger.debug("stream called with input=%r", input_data)
-                allowed, reason = self._kernel.pre_execute(self._ctx, input_data)
-                if not allowed:
-                    logger.info("Policy DENY on stream: %s", reason)
-                    raise PolicyViolationError(reason)
-                logger.info("Policy ALLOW on stream")
+                self._apply_overlays()
+                try:
+                    logger.debug("stream called with input=%r", input_data)
+                    allowed, reason = self._kernel.pre_execute(self._ctx, input_data)
+                    if not allowed:
+                        logger.info("Policy DENY on stream: %s", reason)
+                        raise PolicyViolationError(reason)
+                    logger.info("Policy ALLOW on stream")
 
-                yield from self._original.stream(input_data, **kwargs)
+                    yield from self._original.stream(input_data, **kwargs)
 
-                self._kernel.post_execute(self._ctx, None)
+                    self._kernel.post_execute(self._ctx, None)
+                finally:
+                    self._restore_overlays()
 
             # Passthrough for non-execution methods
             def __getattr__(self, name):
