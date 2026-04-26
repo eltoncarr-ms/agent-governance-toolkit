@@ -381,15 +381,23 @@ class LangChainKernel(BaseIntegration):
                 self._overlays = overlays
                 self._lock = asyncio.Lock()
 
+            @staticmethod
+            def _safe_setattr(obj, attr, value):
+                """Set attribute, bypassing Pydantic's __setattr__ if needed."""
+                try:
+                    setattr(obj, attr, value)
+                except (ValueError, AttributeError):
+                    object.__setattr__(obj, attr, value)
+
             def _apply_overlays(self):
                 """Apply governed wrappers to tool/memory/agent objects."""
                 for obj, attr, _original, governed in self._overlays:
-                    setattr(obj, attr, governed)
+                    self._safe_setattr(obj, attr, governed)
 
             def _restore_overlays(self):
                 """Restore original methods on tool/memory/agent objects."""
                 for obj, attr, orig, _governed in self._overlays:
-                    setattr(obj, attr, orig)
+                    self._safe_setattr(obj, attr, orig)
 
             def invoke(self, input_data: Any, **kwargs) -> Any:
                 """Governed synchronous invocation.

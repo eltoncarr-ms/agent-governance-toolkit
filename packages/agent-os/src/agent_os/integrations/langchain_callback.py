@@ -69,6 +69,16 @@ class GovernanceCallbackHandler:
         self.max_content_length = max_content_length
         self.redact_pii = redact_pii
         self._call_starts: dict[str, tuple[str, float]] = {}  # call_id -> (tool_name, start_time)
+        # LangChain callback manager expects these attributes
+        self.run_inline = False
+        self.raise_error = False
+        self.ignore_retry = False
+        self.ignore_agent = False
+        self.ignore_chain = False
+        self.ignore_chat_model = False
+        self.ignore_llm = False
+        self.ignore_retriever = False
+        self.ignore_custom_event = False
 
     def _process_content(self, content: Any) -> str:
         """Serialize, redact, and truncate content for audit logging."""
