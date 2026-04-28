@@ -535,15 +535,37 @@ jobs:
 
       - name: Run documented contributor flow
         run: |
-          export HOST_UID="$(id -u)"
-          export HOST_GID="$(id -g)"
+          # Compute and validate host UID/GID so the test container can write
+          # to the bind-mounted workspace. Validate they are pure positive
+          # integers before exporting (defense-in-depth: the values come from
+          # `id` on the runner, but we still refuse to forward anything that
+          # is not a non-negative integer to docker compose).
+          HOST_UID="$(id -u)"
+          HOST_GID="$(id -g)"
+          if ! [[ "${HOST_UID}" =~ ^[0-9]+$ ]] || ! [[ "${HOST_GID}" =~ ^[0-9]+$ ]]; then
+            echo "::error::Refusing to run: id -u/-g returned non-numeric value (uid='${HOST_UID}' gid='${HOST_GID}')"
+            exit 1
+          fi
+          export HOST_UID HOST_GID
           echo "Running compose with HOST_UID=${HOST_UID} HOST_GID=${HOST_GID}"
           docker compose up --build dev -d
           docker compose run --rm test
 
       - name: Collect dev container logs
         if: always()
-        run: docker compose logs dev > dev.log 2>&1 || true
+        run: |
+          # Capture and redact obvious secret-shaped tokens before the log is
+          # uploaded as a build artifact. The dev container does not receive
+          # GitHub secrets, but we still scrub conservatively so that any
+          # accidental leakage from a future change does not surface here.
+          docker compose logs dev > dev.log.raw 2>&1 || true
+          sed -E \
+            -e 's/(gh[pousr]_[A-Za-z0-9]{20,})/[REDACTED-GH-TOKEN]/g' \
+            -e 's/(sk-[A-Za-z0-9_-]{20,})/[REDACTED-API-KEY]/g' \
+            -e 's/(AKIA[A-Z0-9]{16})/[REDACTED-AWS-ACCESS-KEY]/g' \
+            -e 's/((password|secret|token|api_?key)[[:space:]]*[:=][[:space:]]*)[^[:space:]"]+/\1[REDACTED]/Ig' \
+            dev.log.raw > dev.log
+          rm -f dev.log.raw
 
       - name: Upload artifacts on failure
         if: failure()
