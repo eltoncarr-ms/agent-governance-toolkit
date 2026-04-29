@@ -84,11 +84,3 @@ sybil
 davidequarracino
 Marp
 Slidev
-pytest
-mypy
-isort
-pyupgrade
-Pydantic
-Docstrings
-classmethod
-xfail
