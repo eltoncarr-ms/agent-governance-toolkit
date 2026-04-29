@@ -229,12 +229,6 @@ and has a different cycle-time cost.
    TypeScript, Rust, Go, lint, build, security scanners, supply-chain
    audits. Don't try to replicate all of CI locally.
 
-> **Why step 3 matters:** PR #1517 hardened a `trusted_keys` field but
-> missed the canonical implementation behind a backward-compat shim.
-> Per-package CI passed (the canonical impl wasn't installed in
-> isolation). The bug only surfaced under `docker compose run --rm test`,
-> which exercises the integrated install end users actually receive.
-
 ### Package Structure
 
 This repo includes these core packages and standalone SDKs today:
