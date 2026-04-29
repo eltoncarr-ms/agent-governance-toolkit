@@ -196,6 +196,18 @@ docker compose --profile dashboard up --build dashboard
 Run these before pushing a PR. Each step catches a different class of bug
 and has a different cycle-time cost.
 
+**Local prerequisites:**
+
+- **Python 3.10+** (CI tests on 3.10, 3.11, 3.12, and 3.13)
+- **pytest** — `pip install pytest` (or install the package's dev extras)
+- **ruff** — `pip install ruff==0.12.4` (matches `agent-governance-python/requirements/ci-lint.txt`)
+- **Docker** with Compose v2 — required for step 3
+- For a given package, run `pip install -e .` from inside the package
+  directory before its first `pytest`. Sibling packages (e.g.
+  `agent-mesh`) may also need to be installed when their canonical
+  modules are imported by the package under test. Step 3's Docker flow
+  handles this automatically.
+
 1. **Inner loop — test the package you changed:**
 
    ```bash
