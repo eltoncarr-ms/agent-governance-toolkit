@@ -18,6 +18,9 @@
 coverage.xml
 node_modules
 
+# Stale directory from pre-#1459 layout (all content moved to repo root)
+packages/
+
 # Security: exclude secrets from build context
 .env
 .env.*
