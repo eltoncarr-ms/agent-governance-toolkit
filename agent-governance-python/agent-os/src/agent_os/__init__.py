@@ -428,7 +428,7 @@ except ImportError:
     pass
 
 try:
-    from agent_os.audit_logger import GovernanceAuditLogger
+    from agent_os.audit_logger import GovernanceAuditLogger, create_audit_logger
 except ImportError:
     pass
 
