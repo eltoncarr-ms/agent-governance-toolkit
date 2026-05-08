@@ -80,6 +80,11 @@ observability = [
     "opentelemetry-sdk>=1.20.0,<2.0",
 ]
 
+sentinel = [
+    "azure-monitor-ingestion>=1.0.0,<2.0",
+    "azure-identity>=1.16.0,<2.0",
+]
+
 mcp = [
     "mcp>=1.0.0,<2.0",
 ]
@@ -97,7 +102,7 @@ nexus = [
 
 # Bundles
 full = [
-    "agent-os-kernel[cmvk,iatp,amb,observability,mcp,nexus]",
+    "agent-os-kernel[cmvk,iatp,amb,observability,mcp,nexus,sentinel]",
 ]
 hypervisor = [
     "agent-governance-toolkit-core>=4.0.0,<5.0",

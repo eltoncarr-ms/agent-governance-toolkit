@@ -429,6 +429,7 @@ __all__ = [
 
     # Audit Logger + OTel Backend
     "GovernanceAuditLogger",
+    "create_audit_logger",
     "OTelLogsBackend",
 
     # GovernanceEventSink SPI
@@ -481,7 +482,7 @@ except ImportError:
     pass
 
 try:
-    from agent_os.audit_logger import GovernanceAuditLogger
+    from agent_os.audit_logger import GovernanceAuditLogger, create_audit_logger
 except ImportError:
     pass
 
@@ -500,4 +501,3 @@ from agent_os.event_sink import (
     GovernanceEventSinkBase,
     SinkExportResult,
 )
-

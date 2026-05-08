@@ -24,6 +24,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Protocol
 
 if TYPE_CHECKING:
+    from agent_os.audit_logger import GovernanceAuditLogger
     from agent_os.policies.decision import PolicyCheckResult
 
 from .tool_aliases import ToolAliasRegistry
@@ -86,6 +87,16 @@ class GovernanceEventType(Enum):
     TOOL_CALL_BLOCKED = "tool_call_blocked"
     CHECKPOINT_CREATED = "checkpoint_created"
     DRIFT_DETECTED = "drift_detected"
+
+
+# Maps event types to audit decision strings for auto-wire audit logging.
+_EVENT_DECISION_MAP: dict[str, str] = {
+    GovernanceEventType.POLICY_CHECK.value: "allow",
+    GovernanceEventType.POLICY_VIOLATION.value: "deny",
+    GovernanceEventType.TOOL_CALL_BLOCKED.value: "deny",
+    GovernanceEventType.CHECKPOINT_CREATED.value: "allow",
+    GovernanceEventType.DRIFT_DETECTED.value: "warn",
+}
 
 
 @dataclass
@@ -1019,9 +1030,11 @@ class BaseIntegration(ABC):
         self,
         policy: GovernancePolicy | None = None,
         evaluator: Any | None = None,
+        audit_logger: GovernanceAuditLogger | None = None,
     ) -> None:
         self.policy: GovernancePolicy = policy or GovernancePolicy()
         self._evaluator: Any | None = evaluator
+        self._audit_logger: GovernanceAuditLogger | None = audit_logger
         self.contexts: dict[str, ExecutionContext] = {}
         self._signal_handlers: dict[str, Callable[..., Any]] = {}
         self._event_listeners: dict[GovernanceEventType, list[Callable[..., Any]]] = {}
@@ -1263,6 +1276,25 @@ class BaseIntegration(ABC):
             except Exception as exc:  # noqa: BLE001 — listener errors must not break governance flow
                 logger.warning(
                     "Governance event listener error for %s: %s",
+                    event_type, exc, exc_info=True,
+                )
+        # Auto-wire to audit logger when configured
+        if self._audit_logger is not None:
+            try:
+                from agent_os.audit_logger import AuditEntry
+
+                entry = AuditEntry(
+                    event_type=event_type.value,
+                    agent_id=data.get("agent_id", ""),
+                    action=data.get("phase", event_type.value),
+                    decision=_EVENT_DECISION_MAP.get(event_type.value, "unknown"),
+                    reason=data.get("reason", ""),
+                    metadata=data,
+                )
+                self._audit_logger.log(entry)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Audit logger error for %s: %s",
                     event_type, exc, exc_info=True,
                 )
 
