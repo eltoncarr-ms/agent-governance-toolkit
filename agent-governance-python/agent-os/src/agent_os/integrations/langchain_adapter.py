@@ -56,10 +56,13 @@ import logging
 import time
 import warnings
 from datetime import datetime
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from .base import PII_PATTERNS, BaseIntegration, GovernancePolicy
 from .tool_aliases import ToolAliasRegistry
+
+if TYPE_CHECKING:
+    from .base import GovernanceAuditLogger
 
 logger = logging.getLogger("agent_os.langchain")
 
@@ -112,6 +115,7 @@ class LangChainKernel(BaseIntegration):
         timeout_seconds: float = 300.0,
         deep_hooks_enabled: bool = True,
         evaluator: Any = None,
+        audit_logger: Optional["GovernanceAuditLogger"] = None,
     ):
         """Initialise the LangChain governance kernel.
 
@@ -127,8 +131,10 @@ class LangChainKernel(BaseIntegration):
             evaluator: Optional ``PolicyEvaluator`` for Cedar/OPA policy
                 evaluation. When set, Cedar policies are consulted before
                 standard ``GovernancePolicy`` checks.
+            audit_logger: Optional governance audit logger used to record
+                integration audit events.
         """
-        super().__init__(policy, evaluator=evaluator)
+        super().__init__(policy, evaluator=evaluator, audit_logger=audit_logger)
         self.timeout_seconds = timeout_seconds
         self.deep_hooks_enabled = deep_hooks_enabled
         self._wrapped_agents: dict[int, Any] = {}  # id(wrapped) -> original
