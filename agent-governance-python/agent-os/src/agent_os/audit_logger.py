@@ -191,6 +191,12 @@ def _register_builtin_backends() -> None:
                 "Azure Monitor audit backend requires azure-monitor-ingestion. "
                 "Install with: pip install 'agent-os-kernel[sentinel]'"
             ) from None
+        # Fall back to environment variables for connection parameters
+        kw.setdefault("dce_endpoint", os.environ.get("AZURE_MONITOR_DCE_ENDPOINT", ""))
+        kw.setdefault("dcr_id", os.environ.get("AZURE_MONITOR_DCR_ID", ""))
+        kw.setdefault("stream_name", os.environ.get(
+            "AZURE_MONITOR_STREAM_NAME", "Custom-AGTGovernanceAudit_CL",
+        ))
         return AzureMonitorBackend(**kw)
 
     _BACKEND_REGISTRY["otel"] = _make_otel
