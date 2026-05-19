@@ -30,6 +30,9 @@ cargo add agentmesh-mcp
 agentmesh-mcp = "3.5.0"
 ```
 
+`agentmesh-mcp` is the canonical MCP implementation. The broader `agentmesh`
+crate keeps `agentmesh::mcp` only as a deprecated compatibility re-export.
+
 ## Quick Start
 
 ```rust
